@@ -280,6 +280,17 @@ php artisan embedding:clean --dry-run                               # report fin
 
 `embedding:clean` walks distinct `embeddable_type` values, classifies each as orphan (class missing or row deleted) or invalid-slot (slot not present in the model's `embeddingSlotMap()`), then deletes the union with a chunked progress bar. Models whose `embeddingSlotMap()` returns an empty array are skipped for the invalid-slot pass — we do not delete records for a model that simply has no slots defined.
 
+```bash
+php artisan embedding:status                                        # full report (configuration, coverage, health, storage)
+php artisan embedding:status "App\Models\Post"                      # restrict to one model
+php artisan embedding:status "App\Models\Post" --slot=title         # restrict to one slot
+php artisan embedding:status --json                                 # machine-readable output
+```
+
+`embedding:status` is read-only. It prints four sections: **Configuration** (resolved similarity driver, vector dimensions, DB / queue connections), **Model Coverage** (per-slot Records / Embedded / Coverage table — coverage uses the same `whereDoesntHave('embeddings', …)` logic as `embedding:generate`'s "missing" pass), **Health** (orphan and invalid-slot counts derived from `CleanCommand` queries, plus `Embedding::count()`), and **Storage** (driver-specific bytes via the `VectorStoreMetrics` contract). Any metric the contract cannot supply is rendered as `n/a`; the command never fails because of a missing storage figure.
+
+`VectorStoreMetrics` (`src/Contracts/VectorStoreMetrics.php`) is the read-side counterpart of `VectorStore`. `snapshot()` returns `['rows' => int, 'bytes' => int|null, 'data_bytes' => int|null, 'index_bytes' => int|null]` — `rows` is always an int, byte fields are `int|null` (null = driver cannot supply). The core package binds `JsonVectorStoreMetrics` by default — it returns `Embedding::count()` for `rows` and `null` for every byte field. DB driver packages override the binding in their `register()` (`MysqlVectorStoreMetrics`, `PgsqlVectorStoreMetrics`, …) to add native byte figures. When `snapshot()` throws, `embedding:status` silently falls back to `n/a` and exits 0; passing `-v` surfaces the underlying exception message. Programmatic callers can call `app(VectorStoreMetrics::class)->snapshot()` directly — the default binding guarantees a result.
+
 ## Horizon Tags
 
 Each `GenerateModelEmbedding` job carries tags: `['embedding', 'slot:title', 'App\Models\Post:42']`.

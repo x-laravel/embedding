@@ -340,6 +340,63 @@ php artisan embedding:clean --force                           # skip the confirm
 php artisan embedding:clean --dry-run                         # report findings, delete nothing
 ```
 
+### `embedding:status`
+
+Read-only health report — configuration, per-slot coverage, orphan / invalid-slot counts, and storage size. Useful after deployments or as a periodic monitoring check.
+
+```bash
+php artisan embedding:status                                  # report on every discovered HasEmbeddings model
+php artisan embedding:status "App\Models\Post"                # restrict to a single model
+php artisan embedding:status "App\Models\Post" --slot=title   # restrict to a single slot
+php artisan embedding:status --json                           # machine-readable output (CI / monitoring)
+```
+
+Sample output:
+
+```
+Configuration:
+  Similarity Driver: php (auto-detected from mysql)
+  Vector Dimensions: 1536
+  DB Connection:     mysql (table: embeddings)
+  Queue Connection:  redis (queue: embedding)
+
+Model Coverage:
++-------------------+---------+---------+----------+----------+
+| Model             | Slot    | Records | Embedded | Coverage |
++-------------------+---------+---------+----------+----------+
+| App\Models\Post   | default | 1,250   | 1,200    | 96.0%    |
+| App\Models\Post   | summary | 1,250   | 1,250    | 100.0%   |
+| App\Models\Article| default | 500     | 500      | 100.0%   |
++-------------------+---------+---------+----------+----------+
+
+Health:
+  Orphan records (missing models):    12  → Run embedding:clean to fix.
+  Invalid slots (stale definitions):  0
+  Total stored vectors:               2,950
+
+Storage:
+  Total size: 124.07 MB
+  Data:       104.93 MB
+  Index:      19.09 MB
+```
+
+Storage metrics are read through the `VectorStoreMetrics` contract. The core package ships a default implementation (`JsonVectorStoreMetrics`) that returns the row count via Eloquent and `null` for every byte field — DB-specific driver packages override the binding in their service provider to provide native byte figures.
+
+You can read the same metrics from your own code:
+
+```php
+use XLaravel\Embedding\Contracts\VectorStoreMetrics;
+
+$snapshot = app(VectorStoreMetrics::class)->snapshot();
+// Without a driver:
+// ['rows' => 2950, 'bytes' => null, 'data_bytes' => null, 'index_bytes' => null]
+//
+// With (for example) the MySQL driver bound:
+// ['rows' => 2950, 'bytes' => 130023424, 'data_bytes' => 110003200, 'index_bytes' => 20020224]
+```
+
+`rows` is always an `int`. The byte fields are `int|null` — `null` means the driver cannot or will not supply that metric (insufficient privileges, unsupported backend, etc.) and is rendered as `n/a` by `embedding:status`. `rows` may be approximate when a driver reports it via fast metadata tables (e.g. MySQL `information_schema.tables.table_rows`); for an exact count, use `XLaravel\Embedding\Models\Embedding::count()` instead.
+
 ## Configuration
 
 | Environment Variable | Default | Description |

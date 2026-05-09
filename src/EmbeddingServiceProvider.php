@@ -7,10 +7,13 @@ use Illuminate\Support\ServiceProvider;
 use XLaravel\Embedding\Console\Commands\CleanCommand;
 use XLaravel\Embedding\Console\Commands\ClearCommand;
 use XLaravel\Embedding\Console\Commands\GenerateCommand;
+use XLaravel\Embedding\Console\Commands\StatusCommand;
 use XLaravel\Embedding\Contracts\EmbeddingClient;
 use XLaravel\Embedding\Contracts\VectorStore;
+use XLaravel\Embedding\Contracts\VectorStoreMetrics;
 use XLaravel\Embedding\SimilarityManager;
 use XLaravel\Embedding\Storage\JsonVectorStore;
+use XLaravel\Embedding\Storage\JsonVectorStoreMetrics;
 
 class EmbeddingServiceProvider extends ServiceProvider
 {
@@ -24,6 +27,7 @@ class EmbeddingServiceProvider extends ServiceProvider
         $this->app->singleton(SimilarityManager::class);
         $this->app->singleton(Reranker::class);
         $this->app->bind(VectorStore::class, JsonVectorStore::class);
+        $this->app->bind(VectorStoreMetrics::class, JsonVectorStoreMetrics::class);
         $this->app->bind(EmbeddingClient::class, AiEmbeddingClient::class);
     }
 
@@ -49,6 +53,7 @@ class EmbeddingServiceProvider extends ServiceProvider
                 GenerateCommand::class,
                 ClearCommand::class,
                 CleanCommand::class,
+                StatusCommand::class,
             ]);
         }
     }
