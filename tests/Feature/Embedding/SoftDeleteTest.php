@@ -3,6 +3,7 @@
 namespace XLaravel\Embedding\Tests\Feature\Embedding;
 
 use XLaravel\Embedding\Tests\Fixtures\Models\Article;
+use XLaravel\Embedding\Tests\Fixtures\Models\ArticleAllFields;
 use XLaravel\Embedding\Tests\Fixtures\Models\ArticleKeepEmbedding;
 use XLaravel\Embedding\Tests\TestCase;
 
@@ -86,6 +87,24 @@ class SoftDeleteTest extends TestCase
         $article->restore();
 
         $this->assertEquals($originalVector, $article->fresh()->embedding->vector);
+    }
+
+    public function test_wildcard_embeddable_does_not_re_embed_during_soft_delete(): void
+    {
+        config(['embedding.soft_delete' => false]);
+
+        $article = ArticleAllFields::create(['title' => 'Hello', 'body' => 'World']);
+        $this->assertTrue($article->hasEmbedding());
+
+        // Soft delete updates deleted_at via save(); without the saved-event
+        // guard, wildcard ($embeddable = ['*']) would dispatch a re-embed
+        // job that races the deleted() handler and leaves a stale row.
+        $article->delete();
+
+        $this->assertDatabaseMissing('embeddings', [
+            'embeddable_type' => ArticleAllFields::class,
+            'embeddable_id' => $article->id,
+        ]);
     }
 
     public function test_embedding_is_deleted_on_force_delete_regardless_of_config(): void

@@ -49,10 +49,13 @@ class EmbeddingObserver
             return;
         }
 
-        // restore() calls save() internally; restored() handles embedding for restores
+        // Both soft-delete and restore call save() internally. Skip embed
+        // dispatch in either case: deleted() / restored() handle those
+        // transitions on their own. Without this guard, wildcard
+        // ($embeddable = ['*']) models would re-embed during a soft-delete
+        // and race the deleted() handler that removes the rows.
         if ($this->usesSoftDelete($model)
-            && $model->wasChanged($model->getDeletedAtColumn())
-            && is_null($model->getAttribute($model->getDeletedAtColumn()))) {
+            && $model->wasChanged($model->getDeletedAtColumn())) {
             return;
         }
 
