@@ -4,6 +4,7 @@ namespace XLaravel\Embedding\Similarity;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use XLaravel\Embedding\Contracts\SimilarityDriver;
 
 class PhpDriver implements SimilarityDriver
@@ -41,7 +42,17 @@ class PhpDriver implements SimilarityDriver
         $matchedIds = $results->pluck('id')->all();
         $scores = $results->pluck('score', 'id')->all();
 
-        return $prototype::findMany($matchedIds)
+        // When the model uses SoftDeletes and embedding.soft_delete=true (or
+        // a per-model keepEmbeddingOnSoftDelete=true), trashed rows still
+        // own embedding records and can score against the query — but the
+        // default global scope hides them from findMany(), silently
+        // dropping otherwise-matching results. Include trashed rows so the
+        // caller decides what to do with them.
+        $modelQuery = in_array(SoftDeletes::class, class_uses_recursive($prototype), true)
+            ? $prototype::query()->withTrashed()
+            : $prototype::query();
+
+        return $modelQuery->findMany($matchedIds)
             ->each(fn ($m) => $m->setAttribute('similarity_score', $scores[$m->getKey()] ?? 0.0))
             ->sortByDesc(fn ($m) => $m->getAttribute('similarity_score'))
             ->values();

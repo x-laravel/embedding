@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use XLaravel\Embedding\Contracts\SimilarityDriver;
 use XLaravel\Embedding\Similarity\PhpDriver;
 use XLaravel\Embedding\SimilarityManager;
+use XLaravel\Embedding\Tests\Fixtures\Models\ArticleKeepEmbedding;
 use XLaravel\Embedding\Tests\Fixtures\Models\Post;
 use XLaravel\Embedding\Tests\TestCase;
 
@@ -204,5 +205,27 @@ class SimilarityTest extends TestCase
         $ranked = Post::rankByRelevance([$post1], $post1->embedding->vector, threshold: 2.0);
 
         $this->assertCount(0, $ranked);
+    }
+
+    public function test_php_driver_includes_soft_deleted_models_with_kept_embeddings(): void
+    {
+        // ArticleKeepEmbedding sets keepEmbeddingOnSoftDelete=true, so its
+        // embedding survives a soft delete. The default findMany() global
+        // scope would hide the trashed row and silently drop the result;
+        // PhpDriver must include trashed rows so the caller sees the match.
+        $a = ArticleKeepEmbedding::create(['title' => 'kept-alpha', 'body' => 'a']);
+        $b = ArticleKeepEmbedding::create(['title' => 'kept-beta', 'body' => 'b']);
+
+        $queryVector = $a->fresh()->embedding->vector;
+
+        $a->delete();
+
+        $results = ArticleKeepEmbedding::similarTo($queryVector, limit: 5);
+
+        $this->assertCount(2, $results);
+        $this->assertTrue(
+            $results->contains(fn ($m) => $m->id === $a->id),
+            'Soft-deleted model with a kept embedding must appear in similarity results.',
+        );
     }
 }
