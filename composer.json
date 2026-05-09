@@ -1,0 +1,46 @@
+{
+    "name": "x-laravel/embedding",
+    "description": "Automatic vector embedding generation for Laravel Eloquent models using laravel/ai.",
+    "keywords": ["laravel", "eloquent", "embedding", "vector", "ai"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "X-Adam",
+            "email": "www@mehmetogmen.com.tr",
+            "homepage": "https://mehmetogmen.com.tr"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "illuminate/database": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0",
+        "illuminate/queue": "^12.0|^13.0",
+        "laravel/ai": "^0.6"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^10.0|^11.0",
+        "phpunit/phpunit": "^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "XLaravel\\Embedding\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "XLaravel\\Embedding\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "XLaravel\\Embedding\\EmbeddingServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
