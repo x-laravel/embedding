@@ -250,17 +250,24 @@ class StatusCommand extends Command
             )->count();
         }
 
-        $instance = new $modelClass();
-        $modelKeys = $modelClass::query()->pluck($instance->getKeyName())->all();
+        // Cross-connection — pluck the (usually small) embedding-side ID
+        // list for this slot first, then verify them against the model
+        // side. Avoids piping the full model table through an IN clause
+        // when most rows have no embedding.
+        $embeddingIds = Embedding::query()
+            ->where('embeddable_type', $modelClass)
+            ->where('slot', $slot)
+            ->pluck('embeddable_id')
+            ->all();
 
-        if (empty($modelKeys)) {
+        if (empty($embeddingIds)) {
             return 0;
         }
 
-        return Embedding::query()
-            ->where('embeddable_type', $modelClass)
-            ->where('slot', $slot)
-            ->whereIn('embeddable_id', $modelKeys)
+        $instance = new $modelClass();
+
+        return $modelClass::query()
+            ->whereIn($instance->getKeyName(), $embeddingIds)
             ->count();
     }
 
@@ -319,22 +326,37 @@ class StatusCommand extends Command
             }
 
             // Cross-connection — JOIN-style subqueries do not work across
-            // databases. Resolve existing IDs from the model side and treat
-            // anything not in that set as an orphan.
+            // databases. Pluck the (usually small) distinct embeddable_id
+            // set from the embedding side, verify which still exist on the
+            // model side, and count the difference. Reverses the naive
+            // direction (model → embedding) so we never ship a multi-thousand
+            // IN clause to the embedding database for types whose model
+            // table is large but barely embedded.
+            $distinctEmbeddedIds = Embedding::query()
+                ->where('embeddable_type', $type)
+                ->distinct()
+                ->pluck('embeddable_id')
+                ->all();
+
+            if (empty($distinctEmbeddedIds)) {
+                continue;
+            }
+
             $existingIds = $instance->getConnection()
                 ->table($instance->getTable())
+                ->whereIn($instance->getKeyName(), $distinctEmbeddedIds)
                 ->pluck($instance->getKeyName())
                 ->all();
 
-            if (empty($existingIds)) {
-                $sum += Embedding::query()->where('embeddable_type', $type)->count();
+            $orphanIds = array_values(array_diff($distinctEmbeddedIds, $existingIds));
 
+            if (empty($orphanIds)) {
                 continue;
             }
 
             $sum += Embedding::query()
                 ->where('embeddable_type', $type)
-                ->whereNotIn('embeddable_id', $existingIds)
+                ->whereIn('embeddable_id', $orphanIds)
                 ->count();
         }
 
@@ -397,11 +419,24 @@ class StatusCommand extends Command
                 continue;
             }
 
-            // Cross-connection — restrict invalid-slot count to records
-            // whose model row still exists, so they are not double-counted
-            // with the orphan pass.
+            // Cross-connection — pluck the candidate IDs straight from the
+            // embedding side filtered by the invalid slot list, then verify
+            // existence on the model side. Same direction reversal as
+            // countOrphans() to keep IN clauses small.
+            $candidateIds = Embedding::query()
+                ->where('embeddable_type', $type)
+                ->whereIn('slot', $invalidSlots)
+                ->distinct()
+                ->pluck('embeddable_id')
+                ->all();
+
+            if (empty($candidateIds)) {
+                continue;
+            }
+
             $existingIds = $instance->getConnection()
                 ->table($instance->getTable())
+                ->whereIn($instance->getKeyName(), $candidateIds)
                 ->pluck($instance->getKeyName())
                 ->all();
 

@@ -87,13 +87,17 @@ class CleanCommand extends Command
             ->pluck('embeddable_type');
 
         foreach ($types as $type) {
-            $queries[] = $this->orphanQueryForType((string) $type);
+            $query = $this->orphanQueryForType((string) $type);
+
+            if ($query !== null) {
+                $queries[] = $query;
+            }
         }
 
         return $queries;
     }
 
-    private function orphanQueryForType(string $type): Builder
+    private function orphanQueryForType(string $type): ?Builder
     {
         if (! class_exists($type)) {
             return Embedding::query()->where('embeddable_type', $type);
@@ -123,23 +127,39 @@ class CleanCommand extends Command
                 });
         }
 
-        // Cross-connection — JOIN-style subqueries do not work across
-        // databases. Resolve existing model IDs through the model's own
-        // connection and exclude them from the embedding query. Query
-        // Builder is used so the SoftDeletes scope does not strip
+        // Cross-connection — pluck the (usually small) distinct embeddable_id
+        // set from the embedding side, verify which still exist on the model
+        // side, and turn the difference into a delete query. Reverses the
+        // naive direction (model → embedding) so we never ship a
+        // multi-thousand IN clause to the embedding database for types whose
+        // model table is large but barely embedded. Query Builder is used on
+        // the model side so the SoftDeletes scope does not strip
         // soft-deleted rows.
+        $distinctEmbeddedIds = Embedding::query()
+            ->where('embeddable_type', $type)
+            ->distinct()
+            ->pluck('embeddable_id')
+            ->all();
+
+        if (empty($distinctEmbeddedIds)) {
+            return null;
+        }
+
         $existingIds = $instance->getConnection()
             ->table($instance->getTable())
+            ->whereIn($instance->getKeyName(), $distinctEmbeddedIds)
             ->pluck($instance->getKeyName())
             ->all();
 
-        if (empty($existingIds)) {
-            return Embedding::query()->where('embeddable_type', $type);
+        $orphanIds = array_values(array_diff($distinctEmbeddedIds, $existingIds));
+
+        if (empty($orphanIds)) {
+            return null;
         }
 
         return Embedding::query()
             ->where('embeddable_type', $type)
-            ->whereNotIn('embeddable_id', $existingIds);
+            ->whereIn('embeddable_id', $orphanIds);
     }
 
     /**
@@ -204,11 +224,24 @@ class CleanCommand extends Command
                 continue;
             }
 
-            // Cross-connection — fetch existing IDs from the model side and
-            // restrict the invalid-slot query to records that still have a
-            // matching model row (so they are not double-counted with orphans).
+            // Cross-connection — pluck the candidate IDs straight from the
+            // embedding side filtered by the invalid slot list, then verify
+            // existence on the model side. Same direction reversal as
+            // orphanQueryForType() to keep IN clauses small.
+            $candidateIds = Embedding::query()
+                ->where('embeddable_type', $type)
+                ->whereIn('slot', $invalidSlots)
+                ->distinct()
+                ->pluck('embeddable_id')
+                ->all();
+
+            if (empty($candidateIds)) {
+                continue;
+            }
+
             $existingIds = $instance->getConnection()
                 ->table($instance->getTable())
+                ->whereIn($instance->getKeyName(), $candidateIds)
                 ->pluck($instance->getKeyName())
                 ->all();
 
