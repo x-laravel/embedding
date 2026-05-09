@@ -18,10 +18,21 @@ use XLaravel\Embedding\SimilarityManager;
 trait Embeddable
 {
     /**
+     * Per-class cache for embeddingSlotMap(). The map is derived purely
+     * from class metadata (`$embeddable` + #[EmbedOn]) and never varies
+     * between instances, so we memoize it once per class lifetime.
+     *
+     * @var array<class-string, array<string, array<int, string>>>
+     */
+    protected static array $slotMapCache = [];
+
+    /**
      * Boot the embeddable trait for a model.
      */
     public static function bootEmbeddable(): void
     {
+        static::$slotMapCache[static::class] ??= static::computeEmbeddingSlotMap();
+
         $whenBootedCallback = function () {
             static::observe(new EmbeddingObserver());
         };
@@ -39,6 +50,15 @@ trait Embeddable
     public function initializeEmbeddable(): void
     {
         $this->addObservableEvents(['embedding', 'embedded']);
+    }
+
+    /**
+     * Drop the cached slot map for the calling class. The next call to
+     * embeddingSlotMap() will recompute from $embeddable / #[EmbedOn].
+     */
+    public static function flushEmbeddingSlotMapCache(): void
+    {
+        unset(static::$slotMapCache[static::class]);
     }
 
     /**
@@ -120,26 +140,41 @@ trait Embeddable
      */
     public function embeddingSlotMap(): array
     {
-        $slotMap = [];
+        return static::$slotMapCache[static::class]
+            ??= static::computeEmbeddingSlotMap();
+    }
 
-        $embeddable = $this->embeddable ?? [];
+    /**
+     * Compute the slot map from class metadata. Called once per class
+     * (during bootEmbeddable or on first lookup) and cached.
+     *
+     * @return array<string, array<int, string>>
+     */
+    protected static function computeEmbeddingSlotMap(): array
+    {
+        $reflection = new \ReflectionClass(static::class);
+        $embeddable = $reflection->getDefaultProperties()['embeddable'] ?? [];
+
+        $slotMap = [];
 
         if (! empty($embeddable)) {
             if (array_is_list($embeddable)) {
                 // Flat list → single default slot
-                $slotMap['default'] = array_merge($slotMap['default'] ?? [], $embeddable);
+                $slotMap['default'] = $embeddable;
             } else {
                 // Nested map → multiple named slots
                 foreach ($embeddable as $slot => $fields) {
-                    $slotMap[$slot] = array_merge($slotMap[$slot] ?? [], (array) $fields);
+                    $slotMap[$slot] = (array) $fields;
                 }
             }
         }
 
-        foreach ((new \ReflectionClass(static::class))->getAttributes(EmbedOn::class) as $attr) {
+        foreach ($reflection->getAttributes(EmbedOn::class) as $attr) {
             $embedOn = $attr->newInstance();
-            $slot = $embedOn->slot;
-            $slotMap[$slot] = array_merge($slotMap[$slot] ?? [], $embedOn->columns);
+            $slotMap[$embedOn->slot] = array_merge(
+                $slotMap[$embedOn->slot] ?? [],
+                $embedOn->columns,
+            );
         }
 
         return $slotMap;
