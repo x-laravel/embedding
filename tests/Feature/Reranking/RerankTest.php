@@ -125,7 +125,7 @@ class RerankTest extends TestCase
         Reranking::assertNothingReranked();
     }
 
-    public function test_single_item_skips_api_call(): void
+    public function test_single_item_skips_api_call_but_sets_score(): void
     {
         Reranking::fake();
 
@@ -133,7 +133,7 @@ class RerankTest extends TestCase
         $reranked = (new EloquentCollection([$only]))->rerankWithScores('q');
 
         $this->assertCount(1, $reranked);
-        $this->assertNull($reranked[0]->getAttribute('rerank_score'));
+        $this->assertEqualsWithDelta(1.0, $reranked[0]->rerank_score, 0.0001);
         Reranking::assertNothingReranked();
     }
 

@@ -17,7 +17,16 @@ class Reranker
         ?string $field = null,
         string $slot = 'default',
     ): EloquentCollection {
-        if ($candidates->isEmpty() || $candidates->count() === 1) {
+        if ($candidates->isEmpty()) {
+            return $candidates;
+        }
+
+        // A single candidate has nothing to rerank against, so we skip the
+        // provider call. We still set rerank_score so downstream code can
+        // rely on the attribute being present regardless of result size.
+        if ($candidates->count() === 1) {
+            $candidates->first()->setAttribute('rerank_score', 1.0);
+
             return $candidates;
         }
 
