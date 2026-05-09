@@ -644,9 +644,9 @@ class StatusCommand extends Command
     {
         $this->line('<comment>Storage:</comment>');
         $this->line('  Rows:       ' . ($storage['rows'] === null ? 'n/a' : number_format($storage['rows'])));
-        $this->line('  Total size: ' . $this->formatBytes($storage['bytes']));
         $this->line('  Data:       ' . $this->formatBytes($storage['data_bytes']));
         $this->line('  Index:      ' . $this->formatBytes($storage['index_bytes']));
+        $this->line('  Total size: ' . $this->formatBytes($storage['bytes']));
         $this->newLine();
     }
 

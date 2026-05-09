@@ -381,9 +381,10 @@ Health:
   Total stored vectors:               2,950
 
 Storage:
-  Total size: 124.07 MB
+  Rows:       2,950
   Data:       104.93 MB
   Index:      19.09 MB
+  Total size: 124.07 MB
 ```
 
 Storage metrics are read through the `VectorStoreMetrics` contract. The core package ships a default implementation (`JsonVectorStoreMetrics`) that returns the row count via Eloquent and `null` for every byte field — DB-specific driver packages override the binding in their service provider to provide native byte figures.
