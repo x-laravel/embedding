@@ -21,6 +21,10 @@ class GenerateModelEmbedding implements ShouldQueue
     {
         $this->onConnection(config('embedding.queue.connection', config('queue.default', 'sync')));
         $this->onQueue(config('embedding.queue.name', 'embedding'));
+
+        // Defer dispatch until the surrounding DB transaction commits, so the
+        // job never runs against a row that has not yet been persisted.
+        $this->afterCommit = true;
     }
 
     /**
