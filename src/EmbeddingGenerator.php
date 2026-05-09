@@ -38,6 +38,19 @@ class EmbeddingGenerator
         $result = $model->toEmbeddingText();
 
         if (is_string($result)) {
+            // Single-slot models only ever embed into 'default'. Accepting
+            // any other slot name silently writes a row at the requested
+            // slot with the same text — producing duplicate embeddings
+            // under different slot keys. Reject the call instead.
+            if ($slot !== 'default') {
+                $class = get_class($model);
+
+                throw new \InvalidArgumentException(
+                    "Slot '{$slot}' was requested but {$class}::toEmbeddingText() returns a string (single-slot model).\n".
+                    "  Fix: call embed()/embedSync() without a slot argument, or change toEmbeddingText() to return an array keyed by slot."
+                );
+            }
+
             return $result;
         }
 
