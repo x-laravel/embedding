@@ -251,4 +251,42 @@ class StatusCommandTest extends TestCase
             ->expectsOutput('Class [Illuminate\\Database\\Eloquent\\Model] does not implement HasEmbeddings.')
             ->assertFailed();
     }
+
+    public function test_health_section_handles_cross_connection_models(): void
+    {
+        config([
+            'database.connections.secondary' => [
+                'driver' => 'sqlite',
+                'database' => ':memory:',
+                'prefix' => '',
+            ],
+            'embedding.database.connection' => 'secondary',
+        ]);
+
+        \Illuminate\Support\Facades\Schema::connection('secondary')->create('embeddings', function ($table) {
+            $table->id();
+            $table->morphs('embeddable');
+            $table->string('slot', 64)->default('default');
+            $table->json('vector');
+            $table->timestamps();
+            $table->unique(['embeddable_type', 'embeddable_id', 'slot']);
+        });
+
+        $live = Article::create(['title' => 'Alive', 'body' => 'Yes']);
+        $orphanId = $live->getKey() + 999;
+
+        // Orphan record on the embeddings (secondary) connection — its
+        // embeddable_id has no matching row on the model (default) connection.
+        Embedding::create([
+            'embeddable_type' => Article::class,
+            'embeddable_id' => $orphanId,
+            'slot' => 'default',
+            'vector' => [0.1, 0.2, 0.3],
+        ]);
+
+        $payload = $this->statusJson(['model' => Article::class]);
+
+        $this->assertSame(1, $payload['health']['orphan_records']);
+        $this->assertSame(0, $payload['health']['invalid_slot_records']);
+    }
 }

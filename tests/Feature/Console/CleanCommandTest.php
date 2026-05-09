@@ -201,4 +201,49 @@ class CleanCommandTest extends TestCase
 
         $this->assertDatabaseCount('embeddings', 1);
     }
+
+    public function test_deletes_orphan_records_when_model_lives_on_a_different_connection(): void
+    {
+        config([
+            'database.connections.secondary' => [
+                'driver' => 'sqlite',
+                'database' => ':memory:',
+                'prefix' => '',
+            ],
+            'embedding.database.connection' => 'secondary',
+        ]);
+
+        \Illuminate\Support\Facades\Schema::connection('secondary')->create('embeddings', function ($table) {
+            $table->id();
+            $table->morphs('embeddable');
+            $table->string('slot', 64)->default('default');
+            $table->json('vector');
+            $table->timestamps();
+            $table->unique(['embeddable_type', 'embeddable_id', 'slot']);
+        });
+
+        $live = Article::create(['title' => 'Alive', 'body' => 'Yes']);
+        $orphanId = $live->getKey() + 999;
+
+        Embedding::create([
+            'embeddable_type' => Article::class,
+            'embeddable_id' => $orphanId,
+            'slot' => 'default',
+            'vector' => [0.1, 0.2],
+        ]);
+
+        $this->assertDatabaseCount('embeddings', 2, 'secondary');
+
+        $this->artisan('embedding:clean', ['--force' => true])
+            ->expectsOutput('Deleted 1 embedding(s).')
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('embeddings', 1, 'secondary');
+        $this->assertSame(
+            0,
+            Embedding::where('embeddable_type', Article::class)
+                ->where('embeddable_id', $orphanId)
+                ->count()
+        );
+    }
 }

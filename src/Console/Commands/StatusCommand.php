@@ -295,20 +295,46 @@ class StatusCommand extends Command
             }
 
             $instance = new $type();
-            $modelTable = $instance->getTable();
-            $modelKey = $instance->getKeyName();
-            $embeddingTable = (new Embedding())->getTable();
+            $modelConnection = $instance->getConnection()->getName();
+            $embeddingConnection = (new Embedding())->getConnection()->getName();
+
+            if ($modelConnection === $embeddingConnection) {
+                $modelTable = $instance->getTable();
+                $modelKey = $instance->getKeyName();
+                $embeddingTable = (new Embedding())->getTable();
+
+                $sum += Embedding::query()
+                    ->where('embeddable_type', $type)
+                    ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
+                        $q->selectRaw('1')
+                            ->from($modelTable)
+                            ->whereColumn(
+                                "{$modelTable}.{$modelKey}",
+                                "{$embeddingTable}.embeddable_id",
+                            );
+                    })
+                    ->count();
+
+                continue;
+            }
+
+            // Cross-connection — JOIN-style subqueries do not work across
+            // databases. Resolve existing IDs from the model side and treat
+            // anything not in that set as an orphan.
+            $existingIds = $instance->getConnection()
+                ->table($instance->getTable())
+                ->pluck($instance->getKeyName())
+                ->all();
+
+            if (empty($existingIds)) {
+                $sum += Embedding::query()->where('embeddable_type', $type)->count();
+
+                continue;
+            }
 
             $sum += Embedding::query()
                 ->where('embeddable_type', $type)
-                ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                    $q->selectRaw('1')
-                        ->from($modelTable)
-                        ->whereColumn(
-                            "{$modelTable}.{$modelKey}",
-                            "{$embeddingTable}.embeddable_id",
-                        );
-                })
+                ->whereNotIn('embeddable_id', $existingIds)
                 ->count();
         }
 
@@ -347,21 +373,46 @@ class StatusCommand extends Command
             }
 
             $instance = new $type();
-            $modelTable = $instance->getTable();
-            $modelKey = $instance->getKeyName();
-            $embeddingTable = (new Embedding())->getTable();
+            $modelConnection = $instance->getConnection()->getName();
+            $embeddingConnection = (new Embedding())->getConnection()->getName();
+
+            if ($modelConnection === $embeddingConnection) {
+                $modelTable = $instance->getTable();
+                $modelKey = $instance->getKeyName();
+                $embeddingTable = (new Embedding())->getTable();
+
+                $sum += Embedding::query()
+                    ->where('embeddable_type', $type)
+                    ->whereIn('slot', $invalidSlots)
+                    ->whereExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
+                        $q->selectRaw('1')
+                            ->from($modelTable)
+                            ->whereColumn(
+                                "{$modelTable}.{$modelKey}",
+                                "{$embeddingTable}.embeddable_id",
+                            );
+                    })
+                    ->count();
+
+                continue;
+            }
+
+            // Cross-connection — restrict invalid-slot count to records
+            // whose model row still exists, so they are not double-counted
+            // with the orphan pass.
+            $existingIds = $instance->getConnection()
+                ->table($instance->getTable())
+                ->pluck($instance->getKeyName())
+                ->all();
+
+            if (empty($existingIds)) {
+                continue;
+            }
 
             $sum += Embedding::query()
                 ->where('embeddable_type', $type)
                 ->whereIn('slot', $invalidSlots)
-                ->whereExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                    $q->selectRaw('1')
-                        ->from($modelTable)
-                        ->whereColumn(
-                            "{$modelTable}.{$modelKey}",
-                            "{$embeddingTable}.embeddable_id",
-                        );
-                })
+                ->whereIn('embeddable_id', $existingIds)
                 ->count();
         }
 

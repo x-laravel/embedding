@@ -100,23 +100,46 @@ class CleanCommand extends Command
         }
 
         $instance = new $type();
-        $modelTable = $instance->getTable();
-        $modelKey = $instance->getKeyName();
-        $embeddingTable = (new Embedding())->getTable();
+        $modelConnection = $instance->getConnection()->getName();
+        $embeddingConnection = (new Embedding())->getConnection()->getName();
 
-        // The subquery uses Query Builder so the SoftDeletes global scope does
-        // not apply — soft-deleted rows still count as "exists" and their
-        // preserved embeddings are not misclassified as orphans.
+        if ($modelConnection === $embeddingConnection) {
+            $modelTable = $instance->getTable();
+            $modelKey = $instance->getKeyName();
+            $embeddingTable = (new Embedding())->getTable();
+
+            // The subquery uses Query Builder so the SoftDeletes global scope
+            // does not apply — soft-deleted rows still count as "exists" and
+            // their preserved embeddings are not misclassified as orphans.
+            return Embedding::query()
+                ->where('embeddable_type', $type)
+                ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
+                    $q->selectRaw('1')
+                        ->from($modelTable)
+                        ->whereColumn(
+                            "{$modelTable}.{$modelKey}",
+                            "{$embeddingTable}.embeddable_id",
+                        );
+                });
+        }
+
+        // Cross-connection — JOIN-style subqueries do not work across
+        // databases. Resolve existing model IDs through the model's own
+        // connection and exclude them from the embedding query. Query
+        // Builder is used so the SoftDeletes scope does not strip
+        // soft-deleted rows.
+        $existingIds = $instance->getConnection()
+            ->table($instance->getTable())
+            ->pluck($instance->getKeyName())
+            ->all();
+
+        if (empty($existingIds)) {
+            return Embedding::query()->where('embeddable_type', $type);
+        }
+
         return Embedding::query()
             ->where('embeddable_type', $type)
-            ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                $q->selectRaw('1')
-                    ->from($modelTable)
-                    ->whereColumn(
-                        "{$modelTable}.{$modelKey}",
-                        "{$embeddingTable}.embeddable_id",
-                    );
-            });
+            ->whereNotIn('embeddable_id', $existingIds);
     }
 
     /**
@@ -154,24 +177,49 @@ class CleanCommand extends Command
             }
 
             $instance = new $type();
-            $modelTable = $instance->getTable();
-            $modelKey = $instance->getKeyName();
-            $embeddingTable = (new Embedding())->getTable();
+            $modelConnection = $instance->getConnection()->getName();
+            $embeddingConnection = (new Embedding())->getConnection()->getName();
 
-            // whereExists guarantees an invalid-slot record only counts when
-            // the model row still exists. Records whose row is gone are
-            // already covered by the orphan pass and must not be counted twice.
+            if ($modelConnection === $embeddingConnection) {
+                $modelTable = $instance->getTable();
+                $modelKey = $instance->getKeyName();
+                $embeddingTable = (new Embedding())->getTable();
+
+                // whereExists guarantees an invalid-slot record only counts
+                // when the model row still exists. Records whose row is gone
+                // are already covered by the orphan pass and must not be
+                // counted twice.
+                $queries[] = Embedding::query()
+                    ->where('embeddable_type', $type)
+                    ->whereIn('slot', $invalidSlots)
+                    ->whereExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
+                        $q->selectRaw('1')
+                            ->from($modelTable)
+                            ->whereColumn(
+                                "{$modelTable}.{$modelKey}",
+                                "{$embeddingTable}.embeddable_id",
+                            );
+                    });
+
+                continue;
+            }
+
+            // Cross-connection — fetch existing IDs from the model side and
+            // restrict the invalid-slot query to records that still have a
+            // matching model row (so they are not double-counted with orphans).
+            $existingIds = $instance->getConnection()
+                ->table($instance->getTable())
+                ->pluck($instance->getKeyName())
+                ->all();
+
+            if (empty($existingIds)) {
+                continue;
+            }
+
             $queries[] = Embedding::query()
                 ->where('embeddable_type', $type)
                 ->whereIn('slot', $invalidSlots)
-                ->whereExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                    $q->selectRaw('1')
-                        ->from($modelTable)
-                        ->whereColumn(
-                            "{$modelTable}.{$modelKey}",
-                            "{$embeddingTable}.embeddable_id",
-                        );
-                });
+                ->whereIn('embeddable_id', $existingIds);
         }
 
         return $queries;
