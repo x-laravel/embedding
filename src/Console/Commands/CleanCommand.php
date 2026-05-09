@@ -3,7 +3,7 @@
 namespace XLaravel\Embedding\Console\Commands;
 
 use Illuminate\Console\Command;
-use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Builder;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
 use XLaravel\Embedding\Models\Embedding;
 
@@ -12,7 +12,7 @@ class CleanCommand extends Command
     protected $signature = 'embedding:clean
         {--orphans-only : Only delete orphan records (model class missing or row deleted)}
         {--invalid-slots-only : Only delete records whose slot is no longer defined on the model}
-        {--chunk=100 : Number of records per delete batch}
+        {--chunk=1000 : Number of records per delete batch}
         {--force : Skip confirmation prompt}
         {--dry-run : Report findings without deleting}';
 
@@ -32,26 +32,27 @@ class CleanCommand extends Command
         $cleanOrphans = ! $invalidSlotsOnly;
         $cleanInvalidSlots = ! $orphansOnly;
 
-        $orphanIds = $cleanOrphans ? $this->findOrphanIds() : [];
-        $invalidSlotIds = $cleanInvalidSlots ? $this->findInvalidSlotIds($orphanIds) : [];
+        $orphanQueries = $cleanOrphans ? $this->orphanQueries() : [];
+        $invalidQueries = $cleanInvalidSlots ? $this->invalidSlotQueries() : [];
 
-        $allIds = array_values(array_unique(array_merge($orphanIds, $invalidSlotIds)));
+        $orphanCount = $this->totalForQueries($orphanQueries);
+        $invalidCount = $this->totalForQueries($invalidQueries);
 
         if ($cleanOrphans) {
-            $this->line('Orphan records: <comment>'.count($orphanIds).'</comment>');
+            $this->line('Orphan records: <comment>'.$orphanCount.'</comment>');
         }
 
         if ($cleanInvalidSlots) {
-            $this->line('Invalid slot records: <comment>'.count($invalidSlotIds).'</comment>');
+            $this->line('Invalid slot records: <comment>'.$invalidCount.'</comment>');
         }
 
-        if (empty($allIds)) {
+        $total = $orphanCount + $invalidCount;
+
+        if ($total === 0) {
             $this->info('Nothing to clean.');
 
             return self::SUCCESS;
         }
-
-        $total = count($allIds);
 
         if ($this->option('dry-run')) {
             $this->info("Dry-run: would delete {$total} embedding(s).");
@@ -66,7 +67,7 @@ class CleanCommand extends Command
             return self::SUCCESS;
         }
 
-        $this->deleteByIdsWithProgress($allIds);
+        $this->deleteWithProgress(array_merge($orphanQueries, $invalidQueries), $total);
 
         $this->info("Deleted {$total} embedding(s).");
 
@@ -74,30 +75,11 @@ class CleanCommand extends Command
     }
 
     /**
-     * @param  array<int, int|string>  $ids
+     * @return array<int, Builder>
      */
-    private function deleteByIdsWithProgress(array $ids): void
+    private function orphanQueries(): array
     {
-        $chunkSize = max(1, (int) $this->option('chunk'));
-        $key = (new Embedding())->getKeyName();
-        $batches = array_chunk($ids, $chunkSize);
-
-        $this->withProgressBar(count($ids), function ($bar) use ($batches, $key) {
-            foreach ($batches as $batch) {
-                Embedding::query()->whereIn($key, $batch)->delete();
-                $bar->advance(count($batch));
-            }
-        });
-
-        $this->newLine();
-    }
-
-    /**
-     * @return array<int, int|string>
-     */
-    private function findOrphanIds(): array
-    {
-        $orphans = [];
+        $queries = [];
 
         $types = Embedding::query()
             ->select('embeddable_type')
@@ -105,52 +87,44 @@ class CleanCommand extends Command
             ->pluck('embeddable_type');
 
         foreach ($types as $type) {
-            if (! class_exists($type)) {
-                $ids = Embedding::query()
-                    ->where('embeddable_type', $type)
-                    ->pluck((new Embedding())->getKeyName())
-                    ->all();
-
-                $orphans = array_merge($orphans, $ids);
-
-                continue;
-            }
-
-            $instance = new $type();
-            $modelQuery = $type::query();
-
-            // Soft-deleted rows still exist in the table — their embeddings are not orphans.
-            // Without withTrashed(), the global scope hides trashed rows and their preserved
-            // embeddings (kept via embedding.soft_delete=true or $keepEmbeddingOnSoftDelete)
-            // would be misclassified as orphans.
-            if (in_array(SoftDeletes::class, class_uses_recursive($type), true)) {
-                $modelQuery->withTrashed();
-            }
-
-            $existingKeys = $modelQuery->pluck($instance->getKeyName())->all();
-
-            $missing = Embedding::query()
-                ->where('embeddable_type', $type)
-                ->when(
-                    ! empty($existingKeys),
-                    fn ($q) => $q->whereNotIn('embeddable_id', $existingKeys),
-                )
-                ->pluck((new Embedding())->getKeyName())
-                ->all();
-
-            $orphans = array_merge($orphans, $missing);
+            $queries[] = $this->orphanQueryForType((string) $type);
         }
 
-        return $orphans;
+        return $queries;
+    }
+
+    private function orphanQueryForType(string $type): Builder
+    {
+        if (! class_exists($type)) {
+            return Embedding::query()->where('embeddable_type', $type);
+        }
+
+        $instance = new $type();
+        $modelTable = $instance->getTable();
+        $modelKey = $instance->getKeyName();
+        $embeddingTable = (new Embedding())->getTable();
+
+        // The subquery uses Query Builder so the SoftDeletes global scope does
+        // not apply — soft-deleted rows still count as "exists" and their
+        // preserved embeddings are not misclassified as orphans.
+        return Embedding::query()
+            ->where('embeddable_type', $type)
+            ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
+                $q->selectRaw('1')
+                    ->from($modelTable)
+                    ->whereColumn(
+                        "{$modelTable}.{$modelKey}",
+                        "{$embeddingTable}.embeddable_id",
+                    );
+            });
     }
 
     /**
-     * @param  array<int, int|string>  $excludeIds  IDs already classified (e.g. as orphans) to skip.
-     * @return array<int, int|string>
+     * @return array<int, Builder>
      */
-    private function findInvalidSlotIds(array $excludeIds = []): array
+    private function invalidSlotQueries(): array
     {
-        $invalid = [];
+        $queries = [];
 
         $rows = Embedding::query()
             ->select('embeddable_type', 'slot')
@@ -179,19 +153,63 @@ class CleanCommand extends Command
                 continue;
             }
 
-            $ids = Embedding::query()
+            $instance = new $type();
+            $modelTable = $instance->getTable();
+            $modelKey = $instance->getKeyName();
+            $embeddingTable = (new Embedding())->getTable();
+
+            // whereExists guarantees an invalid-slot record only counts when
+            // the model row still exists. Records whose row is gone are
+            // already covered by the orphan pass and must not be counted twice.
+            $queries[] = Embedding::query()
                 ->where('embeddable_type', $type)
                 ->whereIn('slot', $invalidSlots)
-                ->when(
-                    ! empty($excludeIds),
-                    fn ($q) => $q->whereNotIn((new Embedding())->getKeyName(), $excludeIds),
-                )
-                ->pluck((new Embedding())->getKeyName())
-                ->all();
-
-            $invalid = array_merge($invalid, $ids);
+                ->whereExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
+                    $q->selectRaw('1')
+                        ->from($modelTable)
+                        ->whereColumn(
+                            "{$modelTable}.{$modelKey}",
+                            "{$embeddingTable}.embeddable_id",
+                        );
+                });
         }
 
-        return $invalid;
+        return $queries;
+    }
+
+    /**
+     * @param  array<int, Builder>  $queries
+     */
+    private function totalForQueries(array $queries): int
+    {
+        $sum = 0;
+
+        foreach ($queries as $query) {
+            $sum += (clone $query)->count();
+        }
+
+        return $sum;
+    }
+
+    /**
+     * @param  array<int, Builder>  $queries
+     */
+    private function deleteWithProgress(array $queries, int $total): void
+    {
+        $chunkSize = max(1, (int) $this->option('chunk'));
+        $key = (new Embedding())->getKeyName();
+
+        $this->withProgressBar($total, function ($bar) use ($queries, $chunkSize, $key) {
+            foreach ($queries as $query) {
+                $query->chunkById($chunkSize, function ($embeddings) use ($bar, $key) {
+                    Embedding::query()
+                        ->whereIn($key, $embeddings->modelKeys())
+                        ->delete();
+                    $bar->advance($embeddings->count());
+                }, $key);
+            }
+        });
+
+        $this->newLine();
     }
 }
