@@ -43,6 +43,11 @@ class TestCase extends Orchestra
             'api_key' => 'fake-api-key-for-testing',
         ]);
         $app['config']->set('ai.default_for_embeddings', 'openai');
+        $app['config']->set('ai.default_for_reranking', 'cohere');
+        $app['config']->set('ai.providers.cohere', [
+            'driver' => 'cohere',
+            'api_key' => 'fake-cohere-key',
+        ]);
 
         $app['config']->set('embedding.database.connection', 'sqlite');
         $app['config']->set('embedding.queue.connection', 'sync');

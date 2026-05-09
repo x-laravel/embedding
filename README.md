@@ -14,6 +14,7 @@ A Laravel package that automatically generates and stores vector embeddings for 
 - When a field changes, only the slots that depend on that field are re-embedded
 - Embedding generation is handled by a queued job per slot — no blocking
 - Similarity search is driver-based: PHP by default (works with any database), or native DB-level vector search via dedicated drivers for MySQL HeatWave, MariaDB 11.7+, PostgreSQL (pgvector), Oracle 26ai, SQL Server 2025, and Qdrant — see [Similarity Drivers](#similarity-drivers)
+- Optional second-stage [reranking](#reranking) reorders candidate results using `laravel/ai`'s rerank gateway (Cohere, Voyage, Jina)
 
 ## Requirements
 
@@ -169,6 +170,39 @@ $post->mostSimilar(limit: 5, slot: 'full');
 All similarity methods set a `similarity_score` attribute (float) on each returned model.
 
 `threshold` defaults to `0.0` — pass a value between `0.0` and `1.0` to filter low-scoring results.
+
+### Reranking
+
+Cosine similarity is good at narrowing a large corpus down to candidates, but mixing in a rerank model on top — Cohere, Voyage, Jina — usually produces noticeably better top-K ordering for RAG pipelines. The package exposes this as a Collection macro that delegates to `laravel/ai`'s reranking gateway:
+
+```php
+$results = Post::similarTo($vector, limit: 50)
+    ->rerankWithScores('UUID primary key performance', take: 5);
+```
+
+Each returned model carries a `rerank_score` attribute alongside the existing `similarity_score`, sorted by rerank score descending. JSON responses include both attributes automatically — formatting and visibility are left to your application layer.
+
+Full signature:
+
+```php
+$collection->rerankWithScores(
+    string $query,
+    int $take = 0,                // 0 = keep all; otherwise top-N (passed as the provider's `top_n`)
+    float $threshold = 0.0,       // 0.0 = no filter; results below this are dropped locally
+    ?string $field = null,        // model column to use as the document text; defaults to toEmbeddingText()
+    string $slot = 'default',     // for multi-slot models, which slot's text to rerank
+);
+```
+
+Empty collections and single-item collections short-circuit — no API call is made.
+
+The active provider follows `laravel/ai`'s `ai.default_for_reranking` config; the package does not add a second layer of provider/model configuration. If you need direct access (e.g. to rerank a manually fetched collection) resolve the service from the container:
+
+```php
+use XLaravel\Embedding\Reranker;
+
+$reranked = app(Reranker::class)->rerank($candidates, query: 'UUID performance', take: 5);
+```
 
 ## Similarity Drivers
 

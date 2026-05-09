@@ -2,6 +2,7 @@
 
 namespace XLaravel\Embedding;
 
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\ServiceProvider;
 use XLaravel\Embedding\Console\Commands\CleanCommand;
 use XLaravel\Embedding\Console\Commands\ClearCommand;
@@ -21,6 +22,7 @@ class EmbeddingServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/embedding.php', 'embedding');
 
         $this->app->singleton(SimilarityManager::class);
+        $this->app->singleton(Reranker::class);
         $this->app->bind(VectorStore::class, JsonVectorStore::class);
         $this->app->bind(EmbeddingClient::class, AiEmbeddingClient::class);
     }
@@ -31,6 +33,8 @@ class EmbeddingServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        $this->registerCollectionMacros();
 
         if ($this->app->runningInConsole()) {
             $this->publishes([
@@ -47,5 +51,23 @@ class EmbeddingServiceProvider extends ServiceProvider
                 CleanCommand::class,
             ]);
         }
+    }
+
+    protected function registerCollectionMacros(): void
+    {
+        if (EloquentCollection::hasMacro('rerankWithScores')) {
+            return;
+        }
+
+        EloquentCollection::macro('rerankWithScores', function (
+            string $query,
+            int $take = 0,
+            float $threshold = 0.0,
+            ?string $field = null,
+            string $slot = 'default',
+        ) {
+            /** @var EloquentCollection $this */
+            return app(Reranker::class)->rerank($this, $query, $take, $threshold, $field, $slot);
+        });
     }
 }

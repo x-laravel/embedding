@@ -61,6 +61,8 @@ EmbeddingObserver (saved/deleted/restored/forceDeleted)
 
 **`SimilarityManager`** (`src/SimilarityManager.php`) extends Laravel's `Manager`. Auto-detection: if a driver registered a name matching the DB connection driver (via `extend()`), it is used; otherwise falls back to `php`. Override with `EMBEDDING_SIMILARITY_DRIVER`.
 
+**`Reranker`** (`src/Reranker.php`) is the orchestrator for two-stage retrieval. After `similarTo()` returns candidate models, the `Eloquent\Collection::rerankWithScores()` macro (registered in `EmbeddingServiceProvider::registerCollectionMacros()`) forwards their texts to `laravel/ai`'s `Reranking::of(...)->rerank()` and sets a `rerank_score` attribute on each model, sorted by score descending. Provider/model selection is delegated entirely to `laravel/ai` via `ai.default_for_reranking` — the package adds no second config layer. Empty and single-item collections short-circuit (no API call). Lives at the top level (peer of `EmbeddingGenerator`), **not** under `src/Similarity/` — that namespace is reserved for things that implement the `SimilarityDriver` contract.
+
 ## Driver System
 
 DB-specific vector support lives in separate packages. Each driver:
@@ -210,6 +212,14 @@ Post::rankByRelevance($collection, 'web framework', slot: 'full');
 $post->similarityTo($otherPost, slot: 'title');   // float score
 $post->mostSimilar(limit: 5, slot: 'full');
 
+// Reranking — Eloquent Collection macro on top of similarTo() output
+Post::similarTo($vector, limit: 50)
+    ->rerankWithScores('query', take: 5, threshold: 0.5, field: null, slot: 'default');
+$post->rerank_score;  // float, set by rerankWithScores alongside similarity_score
+
+// Direct service access (DI / manually-fetched collections)
+app(\XLaravel\Embedding\Reranker::class)->rerank($candidates, query: 'q', take: 5);
+
 // Slot introspection
 $model->embeddingSlotMap(): array    // ['title' => ['title'], 'full' => ['title','body']]
 $model->slotsToEmbed(['title']): array  // ['title', 'full']
@@ -290,6 +300,11 @@ Each `GenerateModelEmbedding` job carries tags: `['embedding', 'slot:title', 'Ap
 - **`laravel/ai` version is `^0.6`** — v0.1.x requires PHP `^8.4`; v0.6.x supports PHP `^8.3`.
 - **`VectorStore` is bound in `register()`** — driver ServiceProviders must bind `VectorStore::class` in `register()`, not `boot()`, so it is available before `EmbeddingGenerator` is first resolved.
 - **`Embedding` model is DB-agnostic** — do not add DB-specific global scopes or casts here. Drivers add their own scopes in `boot()` via `Embedding::addGlobalScope()`.
+- **Reranker macro name is `rerankWithScores`, not `rerank`** — `laravel/ai` already registers `Illuminate\Support\Collection::rerank()` (a more general "rerank by field/closure" macro that does not set scores on the model). To avoid collision and keep both available, our macro is on Eloquent Collection with the explicit `rerankWithScores` name.
+- **Reranker has no provider/model config** — selection is delegated to `laravel/ai` via `ai.default_for_reranking`. The package intentionally does not expose a parallel `embedding.rerank.provider` / `.model` config because two override paths cause drift.
+- **Reranker short-circuits empty and single-item collections** — no API call, no `rerank_score` attribute set. Rerank requires at least two candidates to produce a meaningful ordering.
+- **`rerank_score` follows the same pattern as `similarity_score`** — set via `setAttribute()`, automatically serialized through `toArray()`/`toJson()`. The package does not impose response shape (no Resource sinks, no nesting); applications format as needed.
+- **`Reranking::fake()` for tests** — `laravel/ai` v0.6+ ships `Reranking::fake(Closure|array)` and assertion helpers (`assertReranked`, `assertNothingReranked`). Pass a `Closure(RerankingPrompt $prompt)` returning `RankedDocument[]` for deterministic per-test responses.
 
 ## Git Commits
 
