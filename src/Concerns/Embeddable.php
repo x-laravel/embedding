@@ -332,9 +332,18 @@ trait Embeddable
      */
     public static function similarToText(string $text, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default'): Collection
     {
-        $vector = Embeddings::for([$text])->generate()->first();
+        // The AI provider can legitimately return zero embeddings (empty
+        // input, throttled response, transient backend error). Calling
+        // ->first() on an empty response would raise an undefined-key
+        // error before any guard had a chance to run, so we inspect the
+        // raw response and short-circuit to an empty result set instead.
+        $response = Embeddings::for([$text])->generate();
 
-        return static::similarTo($vector, $limit, $threshold, $where, $slot);
+        if (empty($response->embeddings)) {
+            return new Collection();
+        }
+
+        return static::similarTo($response->first(), $limit, $threshold, $where, $slot);
     }
 
     /**
@@ -347,9 +356,19 @@ trait Embeddable
      */
     public static function rankByRelevance(iterable $models, string|array $query, float $threshold = 0.0, string $slot = 'default'): Collection
     {
-        $queryVector = is_array($query)
-            ? $query
-            : Embeddings::for([$query])->generate()->first();
+        if (is_array($query)) {
+            $queryVector = $query;
+        } else {
+            $response = Embeddings::for([$query])->generate();
+
+            // Empty AI response → empty ranked collection rather than an
+            // undefined-key error from EmbeddingsResponse::first().
+            if (empty($response->embeddings)) {
+                return new Collection();
+            }
+
+            $queryVector = $response->first();
+        }
 
         $collection = Collection::make($models);
         $collection->loadMissing('embeddings');

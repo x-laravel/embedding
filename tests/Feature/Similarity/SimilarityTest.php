@@ -4,6 +4,9 @@ namespace XLaravel\Embedding\Tests\Feature\Similarity;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Laravel\Ai\Embeddings;
+use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\EmbeddingsResponse;
 use XLaravel\Embedding\Contracts\SimilarityDriver;
 use XLaravel\Embedding\Similarity\PhpDriver;
 use XLaravel\Embedding\SimilarityManager;
@@ -227,5 +230,32 @@ class SimilarityTest extends TestCase
             $results->contains(fn ($m) => $m->id === $a->id),
             'Soft-deleted model with a kept embedding must appear in similarity results.',
         );
+    }
+
+    public function test_similar_to_text_returns_empty_collection_when_provider_returns_no_embeddings(): void
+    {
+        Post::create(['title' => 'alpha', 'body' => 'a']);
+
+        // Re-fake AFTER seeding the post so its own embedding generation
+        // uses the default random fake; only the query-time call hits
+        // the empty response we want to exercise.
+        Embeddings::fake(fn () => new EmbeddingsResponse([], 0, new Meta('openai', 'text-embedding-3-small')));
+
+        $results = Post::similarToText('any query');
+
+        $this->assertInstanceOf(Collection::class, $results);
+        $this->assertCount(0, $results);
+    }
+
+    public function test_rank_by_relevance_returns_empty_collection_when_provider_returns_no_embeddings(): void
+    {
+        $post = Post::create(['title' => 'alpha', 'body' => 'a']);
+
+        Embeddings::fake(fn () => new EmbeddingsResponse([], 0, new Meta('openai', 'text-embedding-3-small')));
+
+        $ranked = Post::rankByRelevance([$post], 'any query');
+
+        $this->assertInstanceOf(Collection::class, $ranked);
+        $this->assertCount(0, $ranked);
     }
 }
