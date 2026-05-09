@@ -231,11 +231,44 @@ class StatusCommandTest extends TestCase
         $payload = $this->statusJson(['model' => Article::class]);
 
         $this->assertArrayHasKey('configuration', $payload);
+        $this->assertArrayHasKey('ai', $payload);
         $this->assertArrayHasKey('models', $payload);
         $this->assertArrayHasKey('health', $payload);
         $this->assertArrayHasKey('storage', $payload);
 
         $this->assertSame(1, $payload['health']['total_vectors']);
+    }
+
+    public function test_ai_services_section_reports_configured_provider_and_default_model(): void
+    {
+        $payload = $this->statusJson();
+
+        $this->assertSame('openai', $payload['ai']['embedding']['provider']);
+        $this->assertIsString($payload['ai']['embedding']['model']);
+        $this->assertNotSame('', $payload['ai']['embedding']['model']);
+
+        $this->assertSame('cohere', $payload['ai']['rerank']['provider']);
+        $this->assertIsString($payload['ai']['rerank']['model']);
+        $this->assertNotSame('', $payload['ai']['rerank']['model']);
+    }
+
+    public function test_ai_services_section_falls_back_to_na_when_provider_unconfigured(): void
+    {
+        config([
+            'ai.default_for_embeddings' => null,
+            'ai.default_for_reranking' => null,
+        ]);
+
+        $payload = $this->statusJson();
+
+        $this->assertNull($payload['ai']['embedding']['provider']);
+        $this->assertNull($payload['ai']['embedding']['model']);
+        $this->assertNull($payload['ai']['rerank']['provider']);
+        $this->assertNull($payload['ai']['rerank']['model']);
+
+        $this->artisan('embedding:status')
+            ->expectsOutputToContain('Embedding Provider')
+            ->assertSuccessful();
     }
 
     public function test_invalid_model_class_returns_failure(): void

@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Number;
 use Illuminate\Support\Str;
+use Laravel\Ai\Ai;
 use ReflectionClass;
 use Symfony\Component\Finder\Finder;
 use Throwable;
@@ -32,6 +33,7 @@ class StatusCommand extends Command
         }
 
         $configuration = $this->collectConfiguration();
+        $aiServices = $this->collectAiServices();
         $coverage = $this->collectCoverage($models);
         $health = $this->collectHealth();
         $storage = $this->collectStorage();
@@ -39,6 +41,7 @@ class StatusCommand extends Command
         if ($this->option('json')) {
             $this->line(json_encode([
                 'configuration' => $configuration,
+                'ai' => $aiServices,
                 'models' => $coverage,
                 'health' => $health,
                 'storage' => $storage,
@@ -47,7 +50,7 @@ class StatusCommand extends Command
             return self::SUCCESS;
         }
 
-        $this->renderConfiguration($configuration);
+        $this->renderConfiguration($configuration, $aiServices);
         $this->renderCoverage($coverage);
         $this->renderHealth($health);
         $this->renderStorage($storage);
@@ -455,6 +458,61 @@ class StatusCommand extends Command
     }
 
     /**
+     * @return array{
+     *     embedding: array{provider: string|null, model: string|null},
+     *     rerank: array{provider: string|null, model: string|null},
+     * }
+     */
+    private function collectAiServices(): array
+    {
+        return [
+            'embedding' => $this->resolveAiService('ai.default_for_embeddings', 'embedding'),
+            'rerank' => $this->resolveAiService('ai.default_for_reranking', 'rerank'),
+        ];
+    }
+
+    /**
+     * @return array{provider: string|null, model: string|null}
+     */
+    private function resolveAiService(string $configKey, string $kind): array
+    {
+        $configured = config($configKey);
+
+        // Failover lists are valid laravel/ai config; show only the first
+        // entry's provider name in the table — operators can dig into
+        // config/ai.php for the rest.
+        if (is_array($configured)) {
+            $configured = $configured[0] ?? null;
+
+            if (is_array($configured)) {
+                $configured = $configured['provider'] ?? null;
+            }
+        }
+
+        if (! is_string($configured) || $configured === '') {
+            return ['provider' => null, 'model' => null];
+        }
+
+        try {
+            $provider = $kind === 'embedding'
+                ? Ai::fakeableEmbeddingProvider($configured)
+                : Ai::fakeableRerankingProvider($configured);
+
+            $model = $kind === 'embedding'
+                ? $provider->defaultEmbeddingsModel()
+                : $provider->defaultRerankingModel();
+
+            return ['provider' => $configured, 'model' => $model];
+        } catch (Throwable $e) {
+            if ($this->getOutput()->isVerbose()) {
+                $this->line("  <comment>{$kind} model resolution failed:</comment> {$e->getMessage()}");
+            }
+
+            return ['provider' => $configured, 'model' => null];
+        }
+    }
+
+    /**
      * @return array{rows: int|null, bytes: int|null, data_bytes: int|null, index_bytes: int|null}
      */
     private function collectStorage(): array
@@ -485,22 +543,32 @@ class StatusCommand extends Command
 
     /**
      * @param  array<string, mixed>  $config
+     * @param  array{
+     *     embedding: array{provider: string|null, model: string|null},
+     *     rerank: array{provider: string|null, model: string|null},
+     * }  $services
      */
-    private function renderConfiguration(array $config): void
+    private function renderConfiguration(array $config, array $services): void
     {
         $this->line('<comment>Configuration:</comment>');
 
-        $similarity = $config['similarity_driver'];
+        $similarityNote = '';
         if ($config['similarity_driver_source'] === 'auto' && $config['auto_detected_from'] !== null) {
-            $similarity .= " <fg=gray>(auto-detected from {$config['auto_detected_from']})</>";
+            $similarityNote = "auto from {$config['auto_detected_from']}";
         } elseif ($config['similarity_driver_source'] === 'forced') {
-            $similarity .= ' <fg=gray>(forced via EMBEDDING_SIMILARITY_DRIVER)</>';
+            $similarityNote = 'forced via env';
         }
 
-        $this->line("  Similarity Driver: {$similarity}");
-        $this->line("  Vector Dimensions: {$config['vector_dimensions']}");
-        $this->line("  DB Connection:     {$config['db_connection']} <fg=gray>(table: {$config['db_table']})</>");
-        $this->line("  Queue Connection:  {$config['queue_connection']} <fg=gray>(queue: {$config['queue_name']})</>");
+        $rows = [
+            ['Similarity Driver', $config['similarity_driver'], '', $similarityNote],
+            ['Vector Dimensions', (string) $config['vector_dimensions'], '', ''],
+            ['DB Connection', $config['db_connection'] ?? 'n/a', $config['db_table'] !== null ? "table: {$config['db_table']}" : '', ''],
+            ['Queue Connection', $config['queue_connection'] ?? 'n/a', $config['queue_name'] !== null ? "queue: {$config['queue_name']}" : '', ''],
+            ['Embedding Provider', $services['embedding']['provider'] ?? 'n/a', $services['embedding']['model'] ?? 'n/a', ''],
+            ['Rerank Provider', $services['rerank']['provider'] ?? 'n/a', $services['rerank']['model'] ?? 'n/a', ''],
+        ];
+
+        $this->table(['Setting', 'Value', 'Detail', 'Note'], $rows);
         $this->newLine();
     }
 

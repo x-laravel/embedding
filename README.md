@@ -355,10 +355,16 @@ Sample output:
 
 ```
 Configuration:
-  Similarity Driver: php (auto-detected from mysql)
-  Vector Dimensions: 1536
-  DB Connection:     mysql (table: embeddings)
-  Queue Connection:  redis (queue: embedding)
++--------------------+--------+------------------------+----------------+
+| Setting            | Value  | Detail                 | Note           |
++--------------------+--------+------------------------+----------------+
+| Similarity Driver  | php    |                        | auto from mysql|
+| Vector Dimensions  | 1536   |                        |                |
+| DB Connection      | mysql  | table: embeddings      |                |
+| Queue Connection   | redis  | queue: embedding       |                |
+| Embedding Provider | openai | text-embedding-3-small |                |
+| Rerank Provider    | cohere | rerank-v3.5            |                |
++--------------------+--------+------------------------+----------------+
 
 Model Coverage:
 +-------------------+---------+---------+----------+----------+
