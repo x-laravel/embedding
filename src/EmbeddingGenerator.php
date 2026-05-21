@@ -23,7 +23,7 @@ class EmbeddingGenerator
         $model->fireEmbeddingModelEvent('embedding', $slot);
         event(new ModelEmbedding($model, $slot));
 
-        $vector = $this->client->embed($text);
+        $vector = $this->client->embed($this->truncate($text));
 
         $embeddingRecord = $this->store->store($model, $vector, $slot);
 
@@ -71,5 +71,16 @@ class EmbeddingGenerator
         }
 
         return $result[$slot];
+    }
+
+    private function truncate(string $text): string
+    {
+        $maxLength = config('embedding.max_length');
+
+        if ($maxLength === null) {
+            return $text;
+        }
+
+        return mb_substr($text, 0, (int) $maxLength);
     }
 }

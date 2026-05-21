@@ -81,6 +81,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Input Max Length
+    |--------------------------------------------------------------------------
+    |
+    | Maximum number of characters passed to the embedding model. Text that
+    | exceeds this limit is silently truncated before the API call, preventing
+    | "input length exceeds context length" errors on models with short context
+    | windows (e.g. mxbai-embed-large: ~512 tokens). Set to null to disable
+    | truncation entirely.
+    |
+    */
+
+    'max_length' => env('EMBEDDING_MAX_LENGTH', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | Soft Deletes
     |--------------------------------------------------------------------------
     |
