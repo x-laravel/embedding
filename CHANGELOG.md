@@ -22,10 +22,11 @@ v2 introduces **payload filtering**: models can publish a set of scalar attribut
 - `$model->syncEmbeddingPayload()` — synchronous payload upsert helper (no-op for models without payload definitions; works even while embedding syncing is disabled).
 - Trait helpers: `embeddingPayloadFields()`, `hasEmbeddingPayload()`, `resolveEmbeddingPayload()`, `payloadFieldsChanged()`, `flushEmbeddingPayloadFieldsCache()`.
 - `Embedding::payloadRecord()` — convenience accessor returning the entity's `Models\Embeddable` row (plain method, not an Eloquent relationship — the morph pair is a composite key).
-- `embedding:generate --payload-only` — backfills `embeddables` rows without touching the AI provider or vectors; idempotent, honours `--dry-run`, `--force` refreshes existing rows.
-- `embedding:clean --payload-only` — the orphan scan now also covers `embeddables` (class missing / row deleted / model no longer defines a payload).
-- `embedding:clear` — model and `--all` scopes now also delete `embeddables` rows (slot-scoped clears leave the entity-level payload untouched).
-- `embedding:status` — new **Payload** section (models with payload definitions, `embeddables` row count, entities with embeddings but no payload row) and a `payload` block in the JSON output.
+- CLI split into two namespaces mirroring the two write paths, plus umbrella commands:
+  - `embedding:vector:generate` / `embedding:vector:clear` / `embedding:vector:clean` / `embedding:vector:status` — vector-side only, never touch `embeddables`. `vector:clear` keeps the `--slot` option; `vector:clean` keeps `--orphans-only` / `--invalid-slots-only`.
+  - `embedding:payload:sync` — backfills `embeddables` rows without touching the AI provider or vectors; idempotent, honours `--dry-run`, `--force` refreshes existing rows, `--sync` upserts inline.
+  - `embedding:payload:clear` / `embedding:payload:clean` / `embedding:payload:status` — payload-side only, never touch `embeddings`. `payload:clean` removes stale rows (class missing / row deleted / model no longer defines a payload); `payload:status` reports per-model payload coverage, stale rows and embedded entities missing a payload row.
+  - `embedding:clear` / `embedding:clean` (umbrellas) — operate on **both** tables for full-reset / full-cleanup. `embedding:clear` takes no `--slot` (payload is entity-level); `embedding:clean` takes no `--*-only` filters.
 
 ### Changed
 
@@ -34,6 +35,7 @@ v2 introduces **payload filtering**: models can publish a set of scalar attribut
 - **Breaking:** migrations are no longer auto-loaded (`loadMigrationsFrom` removed). Publish them before migrating: `php artisan vendor:publish --tag=embedding-migrations` (or the driver package's tag when using a DB driver).
 - **Breaking:** queue configuration split. `EMBEDDING_QUEUE` (default `embedding`) is replaced by `EMBEDDING_GENERATE_QUEUE` (`embedding.queue.generate`, default `embedding.generate`) for vector jobs plus `EMBEDDING_SYNC_PAYLOAD_QUEUE` (`embedding.queue.sync_payload`, default `embedding.sync-payload`) for payload jobs. Workers should listen to both, payload first: `php artisan queue:work --queue=embedding.sync-payload,embedding.generate`. SQS queue names cannot contain dots — override both envs with hyphenated names on SQS.
 - **Breaking:** config key `embedding.database.table` renamed to `embedding.database.embeddings_table` (env `EMBEDDINGS_DB_TABLE` unchanged).
+- **Breaking:** `embedding:generate` and `embedding:status` are removed — use `embedding:vector:generate` / `embedding:vector:status` (and `embedding:payload:sync` / `embedding:payload:status` for the payload side). `embedding:clear` / `embedding:clean` remain but as umbrella commands over both tables: `embedding:clear` no longer accepts `--slot` (use `embedding:vector:clear --slot=...`) and `embedding:clean` no longer accepts `--orphans-only` / `--invalid-slots-only` / `--payload-only` (use the namespaced clean commands).
 - All six driver packages (`mysql`, `mariadb`, `pgsql`, `oracle`, `sqlsrv`, `qdrant`) require `x-laravel/embedding ^2.0`, adopt the `SearchRequest` signature, ship their own `create_embeddables_table` migration (same filename as core — the driver file wins) and translate `filter` to native JSON SQL / Qdrant payload filters.
 
 ### Notes

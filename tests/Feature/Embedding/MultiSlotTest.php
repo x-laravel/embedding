@@ -186,7 +186,7 @@ class MultiSlotTest extends TestCase
 
         $this->assertDatabaseCount('embeddings', 0);
 
-        $this->artisan('embedding:generate', [
+        $this->artisan('embedding:vector:generate', [
             'model' => PostMultiSlot::class,
             '--slot' => 'title',
         ])->expectsOutput('Generated embeddings for 1 record(s).')->assertSuccessful();
@@ -204,7 +204,7 @@ class MultiSlotTest extends TestCase
 
         $this->assertDatabaseCount('embeddings', 0);
 
-        $this->artisan('embedding:generate', ['model' => PostMultiSlot::class])
+        $this->artisan('embedding:vector:generate', ['model' => PostMultiSlot::class])
             ->expectsOutput('Generated embeddings for 3 record(s).')
             ->assertSuccessful();
 

@@ -10,7 +10,7 @@ interface VectorStoreMetrics
      * `rows` is always an `int` — every database can serve a row count via
      * Eloquent. The byte fields are best-effort: drivers that cannot reach
      * the underlying metadata (e.g. MySQL `information_schema` without DBA
-     * privileges) must return `null` and let `embedding:status` render
+     * privileges) must return `null` and let `embedding:vector:status` render
      * "n/a". Implementations must not throw to signal "not supported";
      * reserve exceptions for genuine I/O failures.
      *

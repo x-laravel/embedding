@@ -1,27 +1,24 @@
 <?php
 
-namespace XLaravel\Embedding\Tests\Feature\Console;
+namespace XLaravel\Embedding\Tests\Feature\Console\Vector;
 
 use Illuminate\Support\Facades\Artisan;
 use RuntimeException;
 use XLaravel\Embedding\Contracts\VectorStoreMetrics;
-use XLaravel\Embedding\Models\Embeddable as EmbeddableRecord;
 use XLaravel\Embedding\Models\Embedding;
 use XLaravel\Embedding\Tests\Fixtures\Models\Article;
 use XLaravel\Embedding\Tests\Fixtures\Models\PostMultiSlot;
-use XLaravel\Embedding\Tests\Fixtures\Models\VenueMultiSlotWithPayload;
-use XLaravel\Embedding\Tests\Fixtures\Models\VenueWithPayload;
 use XLaravel\Embedding\Tests\TestCase;
 
 class StatusCommandTest extends TestCase
 {
     private function statusJson(array $params = []): array
     {
-        Artisan::call('embedding:status', $params + ['--json' => true]);
+        Artisan::call('embedding:vector:status', $params + ['--json' => true]);
 
         $payload = json_decode(Artisan::output(), true);
 
-        $this->assertIsArray($payload, 'embedding:status --json did not produce a JSON document.');
+        $this->assertIsArray($payload, 'embedding:vector:status --json did not produce a JSON document.');
 
         return $payload;
     }
@@ -170,6 +167,20 @@ class StatusCommandTest extends TestCase
         $this->assertSame(1, $payload['health']['invalid_slot_records']);
     }
 
+    public function test_health_hint_points_at_vector_clean(): void
+    {
+        Embedding::create([
+            'embeddable_type' => 'App\\Models\\Ghost',
+            'embeddable_id' => 1,
+            'slot' => 'default',
+            'vector' => [0.1, 0.2],
+        ]);
+
+        $this->artisan('embedding:vector:status')
+            ->expectsOutputToContain('embedding:vector:clean')
+            ->assertSuccessful();
+    }
+
     public function test_default_metrics_returns_eloquent_count_for_rows_and_null_bytes(): void
     {
         Article::create(['title' => 'A', 'body' => 'a']);
@@ -183,7 +194,7 @@ class StatusCommandTest extends TestCase
         $this->assertNull($payload['storage']['index_bytes']);
 
         // Human-readable rendering should print "n/a" for the unsupported byte fields.
-        $this->artisan('embedding:status')
+        $this->artisan('embedding:vector:status')
             ->expectsOutputToContain('Total size: n/a')
             ->assertSuccessful();
     }
@@ -237,67 +248,12 @@ class StatusCommandTest extends TestCase
         $this->assertArrayHasKey('ai', $payload);
         $this->assertArrayHasKey('models', $payload);
         $this->assertArrayHasKey('health', $payload);
-        $this->assertArrayHasKey('payload', $payload);
         $this->assertArrayHasKey('storage', $payload);
 
+        // The payload block moved to embedding:payload:status.
+        $this->assertArrayNotHasKey('payload', $payload);
+
         $this->assertSame(1, $payload['health']['total_vectors']);
-    }
-
-    public function test_payload_block_reports_full_coverage(): void
-    {
-        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
-
-        $payload = $this->statusJson(['model' => VenueWithPayload::class]);
-
-        $this->assertSame(1, $payload['payload']['models_with_payload']);
-        $this->assertSame(1, $payload['payload']['payload_rows']);
-        $this->assertSame(0, $payload['payload']['embedded_entities_missing_payload']);
-    }
-
-    public function test_payload_block_counts_embedded_entities_missing_payload(): void
-    {
-        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
-
-        EmbeddableRecord::query()->delete();
-
-        $payload = $this->statusJson(['model' => VenueWithPayload::class]);
-
-        $this->assertSame(1, $payload['payload']['models_with_payload']);
-        $this->assertSame(0, $payload['payload']['payload_rows']);
-        $this->assertSame(1, $payload['payload']['embedded_entities_missing_payload']);
-
-        // The human-readable rendering points at the backfill command.
-        $this->artisan('embedding:status', ['model' => VenueWithPayload::class])
-            ->expectsOutputToContain('embedding:generate --payload-only')
-            ->assertSuccessful();
-    }
-
-    public function test_missing_payload_count_is_per_entity_not_per_slot(): void
-    {
-        // Two slots → two embeddings, but a single entity and a single
-        // (deleted) payload row: the missing count must be 1, not 2.
-        VenueMultiSlotWithPayload::create([
-            'name' => 'A', 'description' => 'desc', 'province_id' => 34,
-        ]);
-
-        $this->assertSame(2, Embedding::query()->count());
-
-        EmbeddableRecord::query()->delete();
-
-        $payload = $this->statusJson(['model' => VenueMultiSlotWithPayload::class]);
-
-        $this->assertSame(1, $payload['payload']['embedded_entities_missing_payload']);
-    }
-
-    public function test_payload_block_is_zero_for_models_without_payload(): void
-    {
-        Article::create(['title' => 'A', 'body' => 'a']);
-
-        $payload = $this->statusJson(['model' => Article::class]);
-
-        $this->assertSame(0, $payload['payload']['models_with_payload']);
-        $this->assertSame(0, $payload['payload']['payload_rows']);
-        $this->assertSame(0, $payload['payload']['embedded_entities_missing_payload']);
     }
 
     public function test_ai_services_section_reports_configured_provider_and_default_model(): void
@@ -327,21 +283,21 @@ class StatusCommandTest extends TestCase
         $this->assertNull($payload['ai']['rerank']['provider']);
         $this->assertNull($payload['ai']['rerank']['model']);
 
-        $this->artisan('embedding:status')
+        $this->artisan('embedding:vector:status')
             ->expectsOutputToContain('Embedding Provider')
             ->assertSuccessful();
     }
 
     public function test_invalid_model_class_returns_failure(): void
     {
-        $this->artisan('embedding:status', ['model' => 'App\\Models\\DoesNotExist'])
+        $this->artisan('embedding:vector:status', ['model' => 'App\\Models\\DoesNotExist'])
             ->expectsOutput('Class [App\\Models\\DoesNotExist] does not exist.')
             ->assertFailed();
     }
 
     public function test_rejects_model_that_does_not_implement_has_embeddings(): void
     {
-        $this->artisan('embedding:status', ['model' => \Illuminate\Database\Eloquent\Model::class])
+        $this->artisan('embedding:vector:status', ['model' => \Illuminate\Database\Eloquent\Model::class])
             ->expectsOutput('Class [Illuminate\\Database\\Eloquent\\Model] does not implement HasEmbeddings.')
             ->assertFailed();
     }
@@ -364,14 +320,6 @@ class StatusCommandTest extends TestCase
             $table->json('vector');
             $table->timestamps();
             $table->unique(['embeddable_type', 'embeddable_id', 'slot']);
-        });
-
-        \Illuminate\Support\Facades\Schema::connection('secondary')->create('embeddables', function ($table) {
-            $table->id();
-            $table->morphs('embeddable');
-            $table->json('payload');
-            $table->timestamps();
-            $table->unique(['embeddable_type', 'embeddable_id']);
         });
 
         $live = Article::create(['title' => 'Alive', 'body' => 'Yes']);

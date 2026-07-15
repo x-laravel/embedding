@@ -3,26 +3,27 @@
 namespace XLaravel\Embedding\Console\Commands;
 
 use Illuminate\Console\Command;
+use XLaravel\Embedding\Console\Commands\Concerns\DeletesRecordsInChunks;
 use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 
 class ClearCommand extends Command
 {
+    use DeletesRecordsInChunks;
+
     protected $signature = 'embedding:clear
         {model? : Fully qualified model class to clear (omit when using --all)}
-        {--slot= : Only clear records for this specific slot (payload records are kept)}
-        {--all : Clear embeddings for every model (truncate path when no other filter is set)}
+        {--all : Clear embeddings and payload records for every model (truncate path)}
         {--chunk=100 : Number of records per delete batch when not truncating}
         {--force : Skip confirmation prompt}
         {--dry-run : Report counts without deleting}';
 
-    protected $description = 'Delete stored embeddings (and payload records) for a specific model, or all of them with --all.';
+    protected $description = 'Delete stored vector embeddings AND payload records for a specific model, or all of them with --all. For a single table use embedding:vector:clear / embedding:payload:clear.';
 
     public function handle(): int
     {
         $modelClass = $this->argument('model');
         $all = (bool) $this->option('all');
-        $slot = $this->option('slot');
 
         if ($all && $modelClass !== null) {
             $this->error('The [model] argument cannot be combined with --all.');
@@ -43,30 +44,16 @@ class ClearCommand extends Command
         }
 
         $query = Embedding::query();
+        $payloadQuery = Embeddable::query();
 
         if ($modelClass !== null) {
             $query->where('embeddable_type', $modelClass);
-        }
-
-        if ($slot !== null) {
-            $query->where('slot', $slot);
-        }
-
-        // Payload records are entity-level, not slot-level — a slot-scoped
-        // clear is partial and must leave the shared payload row intact.
-        $payloadQuery = null;
-
-        if ($slot === null) {
-            $payloadQuery = Embeddable::query();
-
-            if ($modelClass !== null) {
-                $payloadQuery->where('embeddable_type', $modelClass);
-            }
+            $payloadQuery->where('embeddable_type', $modelClass);
         }
 
         $count = (clone $query)->count();
-        $payloadCount = $payloadQuery !== null ? (clone $payloadQuery)->count() : 0;
-        $description = $this->describeTarget($modelClass, $slot, $all, $payloadCount);
+        $payloadCount = (clone $payloadQuery)->count();
+        $description = $this->describeTarget($modelClass, $all, $payloadCount);
         $subject = $this->describeSubject($count, $payloadCount);
 
         if ($count === 0 && $payloadCount === 0) {
@@ -88,18 +75,20 @@ class ClearCommand extends Command
             return self::SUCCESS;
         }
 
-        if ($all && $slot === null) {
+        if ($all) {
             $embedding = new Embedding();
             $embedding->getConnection()->table($embedding->getTable())->truncate();
 
             $embeddable = new Embeddable();
             $embeddable->getConnection()->table($embeddable->getTable())->truncate();
         } else {
-            if ($count > 0) {
-                $this->deleteWithProgress($query, $count);
-            }
-
-            $payloadQuery?->delete();
+            $this->deleteWithProgress(
+                array_filter([
+                    $count > 0 ? $query : null,
+                    $payloadCount > 0 ? $payloadQuery : null,
+                ]),
+                $count + $payloadCount,
+            );
         }
 
         $this->info("Deleted {$subject} {$description}.");
@@ -118,35 +107,12 @@ class ClearCommand extends Command
         return $subject;
     }
 
-    private function deleteWithProgress(\Illuminate\Database\Eloquent\Builder $query, int $total): void
+    private function describeTarget(?string $modelClass, bool $all, int $payloadCount): string
     {
-        $chunk = max(1, (int) $this->option('chunk'));
-        $key = (new Embedding())->getKeyName();
-
-        $this->withProgressBar($total, function ($bar) use ($query, $chunk, $key) {
-            $query->select([$key])->chunkById($chunk, function ($rows) use ($bar, $key) {
-                Embedding::query()->whereIn($key, $rows->pluck($key)->all())->delete();
-                $bar->advance($rows->count());
-            }, $key);
-        });
-
-        $this->newLine();
-    }
-
-    private function describeTarget(?string $modelClass, ?string $slot, bool $all, int $payloadCount): string
-    {
-        if ($all && $slot === null) {
+        if ($all) {
             return $payloadCount > 0
                 ? 'from the entire embeddings and embeddables tables'
                 : 'from the entire embeddings table';
-        }
-
-        if ($all && $slot !== null) {
-            return "across all models for slot [{$slot}]";
-        }
-
-        if ($modelClass !== null && $slot !== null) {
-            return "for [{$modelClass}] slot [{$slot}]";
         }
 
         return "for [{$modelClass}]";

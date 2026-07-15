@@ -6,8 +6,14 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\ServiceProvider;
 use XLaravel\Embedding\Console\Commands\CleanCommand;
 use XLaravel\Embedding\Console\Commands\ClearCommand;
-use XLaravel\Embedding\Console\Commands\GenerateCommand;
-use XLaravel\Embedding\Console\Commands\StatusCommand;
+use XLaravel\Embedding\Console\Commands\Payload\CleanCommand as PayloadCleanCommand;
+use XLaravel\Embedding\Console\Commands\Payload\ClearCommand as PayloadClearCommand;
+use XLaravel\Embedding\Console\Commands\Payload\StatusCommand as PayloadStatusCommand;
+use XLaravel\Embedding\Console\Commands\Payload\SyncCommand as PayloadSyncCommand;
+use XLaravel\Embedding\Console\Commands\Vector\CleanCommand as VectorCleanCommand;
+use XLaravel\Embedding\Console\Commands\Vector\ClearCommand as VectorClearCommand;
+use XLaravel\Embedding\Console\Commands\Vector\GenerateCommand as VectorGenerateCommand;
+use XLaravel\Embedding\Console\Commands\Vector\StatusCommand as VectorStatusCommand;
 use XLaravel\Embedding\Contracts\EmbeddingClient;
 use XLaravel\Embedding\Contracts\PayloadStore;
 use XLaravel\Embedding\Contracts\VectorStore;
@@ -51,10 +57,16 @@ class EmbeddingServiceProvider extends ServiceProvider
             ], 'embedding-migrations');
 
             $this->commands([
-                GenerateCommand::class,
+                VectorGenerateCommand::class,
+                VectorClearCommand::class,
+                VectorCleanCommand::class,
+                VectorStatusCommand::class,
+                PayloadSyncCommand::class,
+                PayloadClearCommand::class,
+                PayloadCleanCommand::class,
+                PayloadStatusCommand::class,
                 ClearCommand::class,
                 CleanCommand::class,
-                StatusCommand::class,
             ]);
         }
     }

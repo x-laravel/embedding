@@ -361,69 +361,97 @@ class Post extends Model implements HasEmbeddings
 
 ## Artisan Commands
 
-### `embedding:generate`
+The CLI mirrors the package's two independent write paths: `embedding:vector:*` commands only ever touch the `embeddings` table, `embedding:payload:*` commands only ever touch the `embeddables` table. Two umbrella commands (`embedding:clear`, `embedding:clean`) operate on both tables at once for full-reset / full-cleanup workflows.
+
+### `embedding:vector:generate`
 
 ```bash
-php artisan embedding:generate                                # auto-discover models in app/Models
-php artisan embedding:generate "App\Models\Post"              # missing embeddings, all slots
-php artisan embedding:generate "App\Models\Post" --slot=title # specific slot only
-php artisan embedding:generate "App\Models\Post" --limit=100  # at most 100 records per slot
-php artisan embedding:generate "App\Models\Post" --chunk=500  # fetch records 500 at a time
-php artisan embedding:generate "App\Models\Post" --sync       # generate inline instead of queueing
-php artisan embedding:generate "App\Models\Post" --force      # regenerate all records, all slots
-php artisan embedding:generate --dry-run                      # report counts, dispatch nothing
-php artisan embedding:generate -v                             # verbose: show stack traces / discovery skips
-php artisan embedding:generate --payload-only                 # backfill embeddables rows only — no AI, no vectors
+php artisan embedding:vector:generate                                # auto-discover models in app/Models
+php artisan embedding:vector:generate "App\Models\Post"              # missing embeddings, all slots
+php artisan embedding:vector:generate "App\Models\Post" --slot=title # specific slot only
+php artisan embedding:vector:generate "App\Models\Post" --limit=100  # at most 100 records per slot
+php artisan embedding:vector:generate "App\Models\Post" --chunk=500  # fetch records 500 at a time
+php artisan embedding:vector:generate "App\Models\Post" --sync       # generate inline instead of queueing
+php artisan embedding:vector:generate "App\Models\Post" --force      # regenerate all records, all slots
+php artisan embedding:vector:generate --dry-run                      # report counts, dispatch nothing
+php artisan embedding:vector:generate -v                             # verbose: show stack traces / discovery skips
 ```
 
 When the model argument is omitted, the command scans `app/Models` (or `app/`) for classes implementing `HasEmbeddings`, asks for confirmation if more than one is found, and processes them sequentially. Failures are isolated per model and a summary is printed at the end.
 
-`--payload-only` fills missing `embeddables` rows for models with payload definitions (idempotent; `--force` refreshes existing rows, `--sync` upserts inline instead of queueing). It cannot be combined with `--slot` — the payload is entity-level. Use it as the backfill step after upgrading to v2 or after adding `#[EmbedPayload]` to a model with existing records.
+### `embedding:payload:sync`
 
-### `embedding:clear`
-
-Bulk-delete stored embeddings. Requires either a model class or `--all`.
+Backfill missing `embeddables` rows for models with payload definitions — no AI calls, no vectors.
 
 ```bash
-php artisan embedding:clear "App\Models\Post"                 # all embeddings for Post
-php artisan embedding:clear "App\Models\Post" --slot=title    # only the title slot for Post
-php artisan embedding:clear --slot=title --all                # delete the title slot across every model
-php artisan embedding:clear --all                             # truncate the entire embeddings table
-php artisan embedding:clear "App\Models\Post" --chunk=500     # 500 rows per delete batch (progress bar)
-php artisan embedding:clear "App\Models\Post" --force         # skip the confirmation prompt
-php artisan embedding:clear "App\Models\Post" --dry-run       # report counts, delete nothing
+php artisan embedding:payload:sync                                   # auto-discover models in app/Models
+php artisan embedding:payload:sync "App\Models\Venue"                # missing payload rows only
+php artisan embedding:payload:sync "App\Models\Venue" --limit=100    # at most 100 records
+php artisan embedding:payload:sync "App\Models\Venue" --chunk=500    # fetch records 500 at a time
+php artisan embedding:payload:sync "App\Models\Venue" --sync         # upsert inline instead of queueing
+php artisan embedding:payload:sync "App\Models\Venue" --force        # re-sync all rows, including existing ones
+php artisan embedding:payload:sync --dry-run                         # report counts, dispatch nothing
 ```
 
-Model and `--all` scopes also delete the matching `embeddables` (payload) rows. Slot-scoped clears (`--slot=...`) leave the payload untouched — it is entity-level, not slot-level.
+Idempotent — records that already have a payload row are skipped unless `--force` is given. Use it as the backfill step after upgrading to v2 or after adding `#[EmbedPayload]` to a model with existing records. Payload-less models warn and count 0.
 
-### `embedding:clean`
+### `embedding:vector:clear` / `embedding:payload:clear` / `embedding:clear`
 
-Tidy up stale rows. By default deletes both **orphan** records (model class missing or model row no longer exists) and records whose `slot` is no longer defined in the model's `embeddingSlotMap()`.
+Bulk-delete stored records. All three require either a model class or `--all`.
 
 ```bash
-php artisan embedding:clean                                   # delete orphans + invalid-slot + stale payload records
-php artisan embedding:clean --orphans-only                    # only remove orphans
-php artisan embedding:clean --invalid-slots-only              # only remove records with unknown slots
-php artisan embedding:clean --payload-only                    # only remove stale embeddables (payload) rows
-php artisan embedding:clean --chunk=500                       # 500 rows per delete batch (progress bar)
-php artisan embedding:clean --force                           # skip the confirmation prompt
-php artisan embedding:clean --dry-run                         # report findings, delete nothing
+# Vector table only (slot-aware)
+php artisan embedding:vector:clear "App\Models\Post"                 # all embeddings for Post
+php artisan embedding:vector:clear "App\Models\Post" --slot=title    # only the title slot for Post
+php artisan embedding:vector:clear --slot=title --all                # delete the title slot across every model
+php artisan embedding:vector:clear --all                             # truncate the entire embeddings table
+
+# Payload table only
+php artisan embedding:payload:clear "App\Models\Venue"               # all payload rows for Venue
+php artisan embedding:payload:clear --all                            # truncate the entire embeddables table
+
+# Both tables at once (umbrella — no --slot, the payload is entity-level)
+php artisan embedding:clear "App\Models\Venue"                       # embeddings + payload rows for Venue
+php artisan embedding:clear --all                                    # truncate both tables
 ```
 
-The scan also covers the `embeddables` table: rows whose model class is missing, whose model row was deleted, or whose model no longer defines a payload are removed. The three `--*-only` flags are mutually exclusive.
+`--chunk=500`, `--force` and `--dry-run` work on all three. `embedding:vector:clear` never touches payload rows and `embedding:payload:clear` never touches vectors — use the umbrella `embedding:clear` for a full reset.
 
-### `embedding:status`
+### `embedding:vector:clean` / `embedding:payload:clean` / `embedding:clean`
 
-Read-only health report — configuration, per-slot coverage, payload coverage, orphan / invalid-slot counts, and storage size. Useful after deployments or as a periodic monitoring check. The **Payload** section reports how many models define a payload, the `embeddables` row count, and how many embedded entities are missing a payload row (with a `embedding:generate --payload-only` backfill hint); the JSON output carries the same figures in a `payload` block.
+Tidy up stale rows.
 
 ```bash
-php artisan embedding:status                                  # report on every discovered HasEmbeddings model
-php artisan embedding:status "App\Models\Post"                # restrict to a single model
-php artisan embedding:status "App\Models\Post" --slot=title   # restrict to a single slot
-php artisan embedding:status --json                           # machine-readable output (CI / monitoring)
+# Vector table only
+php artisan embedding:vector:clean                                   # delete orphans + invalid-slot records
+php artisan embedding:vector:clean --orphans-only                    # only remove orphans
+php artisan embedding:vector:clean --invalid-slots-only              # only remove records with unknown slots
+
+# Payload table only
+php artisan embedding:payload:clean                                  # delete stale embeddables rows
+
+# Both tables at once (umbrella)
+php artisan embedding:clean                                          # orphans + invalid slots + stale payload rows
 ```
 
-Sample output:
+`--chunk=500`, `--force` and `--dry-run` work on all three. **Orphans** are records whose model class is missing or whose model row no longer exists; **invalid-slot** records point at a slot no longer defined in the model's `embeddingSlotMap()`; **stale payload** rows additionally cover models that no longer define a payload.
+
+### `embedding:vector:status` / `embedding:payload:status`
+
+Read-only health reports. `embedding:vector:status` covers configuration, per-slot coverage, orphan / invalid-slot counts, and storage size; `embedding:payload:status` covers payload configuration, per-model payload coverage, stale rows, and embedded entities missing a payload row (with an `embedding:payload:sync` backfill hint). Useful after deployments or as a periodic monitoring check.
+
+```bash
+php artisan embedding:vector:status                                  # report on every discovered HasEmbeddings model
+php artisan embedding:vector:status "App\Models\Post"                # restrict to a single model
+php artisan embedding:vector:status "App\Models\Post" --slot=title   # restrict to a single slot
+php artisan embedding:vector:status --json                           # machine-readable output (CI / monitoring)
+
+php artisan embedding:payload:status                                 # payload-side report
+php artisan embedding:payload:status "App\Models\Venue"              # restrict to a single model
+php artisan embedding:payload:status --json                          # machine-readable output
+```
+
+Sample `embedding:vector:status` output:
 
 ```
 Configuration:
@@ -448,7 +476,7 @@ Model Coverage:
 +-------------------+---------+---------+----------+----------+
 
 Health:
-  Orphan records (missing models):    12  → Run embedding:clean to fix.
+  Orphan records (missing models):    12  → Run embedding:vector:clean to fix.
   Invalid slots (stale definitions):  0
   Total stored vectors:               2,950
 
@@ -474,7 +502,7 @@ $snapshot = app(VectorStoreMetrics::class)->snapshot();
 // ['rows' => 2950, 'bytes' => 130023424, 'data_bytes' => 110003200, 'index_bytes' => 20020224]
 ```
 
-`rows` is always an `int`. The byte fields are `int|null` — `null` means the driver cannot or will not supply that metric (insufficient privileges, unsupported backend, etc.) and is rendered as `n/a` by `embedding:status`. `rows` may be approximate when a driver reports it via fast metadata tables (e.g. MySQL `information_schema.tables.table_rows`); for an exact count, use `XLaravel\Embedding\Models\Embedding::count()` instead.
+`rows` is always an `int`. The byte fields are `int|null` — `null` means the driver cannot or will not supply that metric (insufficient privileges, unsupported backend, etc.) and is rendered as `n/a` by `embedding:vector:status`. `rows` may be approximate when a driver reports it via fast metadata tables (e.g. MySQL `information_schema.tables.table_rows`); for an exact count, use `XLaravel\Embedding\Models\Embedding::count()` instead.
 
 ## Configuration
 

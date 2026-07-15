@@ -1,29 +1,31 @@
 <?php
 
-namespace XLaravel\Embedding\Console\Commands;
+namespace XLaravel\Embedding\Console\Commands\Vector;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Number;
-use Illuminate\Support\Str;
 use Laravel\Ai\Ai;
-use ReflectionClass;
-use Symfony\Component\Finder\Finder;
 use Throwable;
-use XLaravel\Embedding\Contracts\HasEmbeddings;
+use XLaravel\Embedding\Console\Commands\Concerns\BuildsVectorHealthQueries;
+use XLaravel\Embedding\Console\Commands\Concerns\ResolvesEmbeddableModels;
+use XLaravel\Embedding\Console\Commands\Concerns\SumsQueryCounts;
 use XLaravel\Embedding\Contracts\VectorStoreMetrics;
-use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 use XLaravel\Embedding\SimilarityManager;
 
 class StatusCommand extends Command
 {
-    protected $signature = 'embedding:status
+    use BuildsVectorHealthQueries;
+    use ResolvesEmbeddableModels;
+    use SumsQueryCounts;
+
+    protected $signature = 'embedding:vector:status
         {model? : Restrict the report to a single HasEmbeddings model class}
         {--slot= : Restrict the report to a single slot}
         {--json : Emit a single JSON object suitable for CI / monitoring}';
 
-    protected $description = 'Show a read-only health report for the embeddings table (configuration, coverage, orphans, storage size).';
+    protected $description = 'Show a read-only health report for the embeddings table (configuration, coverage, orphans, storage size). Payload health lives in embedding:payload:status.';
 
     public function handle(): int
     {
@@ -37,7 +39,6 @@ class StatusCommand extends Command
         $aiServices = $this->collectAiServices();
         $coverage = $this->collectCoverage($models);
         $health = $this->collectHealth();
-        $payload = $this->collectPayload($models);
         $storage = $this->collectStorage();
 
         if ($this->option('json')) {
@@ -46,7 +47,6 @@ class StatusCommand extends Command
                 'ai' => $aiServices,
                 'models' => $coverage,
                 'health' => $health,
-                'payload' => $payload,
                 'storage' => $storage,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION));
 
@@ -56,92 +56,9 @@ class StatusCommand extends Command
         $this->renderConfiguration($configuration, $aiServices);
         $this->renderCoverage($coverage);
         $this->renderHealth($health);
-        $this->renderPayload($payload);
         $this->renderStorage($storage);
 
         return self::SUCCESS;
-    }
-
-    /**
-     * @return array<int, string>|null  null = explicit model failed validation
-     */
-    private function resolveModels(): ?array
-    {
-        $arg = $this->argument('model');
-
-        if ($arg !== null) {
-            return $this->validateModel($arg) ? [$arg] : null;
-        }
-
-        return $this->discoverModels();
-    }
-
-    private function validateModel(string $modelClass): bool
-    {
-        if (! class_exists($modelClass)) {
-            $this->error("Class [{$modelClass}] does not exist.");
-
-            return false;
-        }
-
-        if (! is_a($modelClass, HasEmbeddings::class, true)) {
-            $this->error("Class [{$modelClass}] does not implement HasEmbeddings.");
-
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function discoverModels(): array
-    {
-        $path = is_dir(app_path('Models')) ? app_path('Models') : app_path();
-
-        if (! is_dir($path)) {
-            return [];
-        }
-
-        $namespace = $this->laravel->getNamespace();
-        $basePath = realpath(app_path()) . DIRECTORY_SEPARATOR;
-
-        $found = [];
-
-        foreach ((new Finder())->in($path)->files()->name('*.php') as $file) {
-            $class = $namespace . str_replace(
-                ['/', '.php'],
-                ['\\', ''],
-                Str::after($file->getRealPath(), $basePath)
-            );
-
-            try {
-                if (! class_exists($class)) {
-                    continue;
-                }
-            } catch (Throwable $e) {
-                if ($this->getOutput()->isVerbose()) {
-                    $this->line("  <comment>Skipped {$file->getRealPath()}</comment>: {$e->getMessage()}");
-                }
-
-                continue;
-            }
-
-            if (! is_a($class, HasEmbeddings::class, true)) {
-                continue;
-            }
-
-            if ((new ReflectionClass($class))->isAbstract()) {
-                continue;
-            }
-
-            $found[] = $class;
-        }
-
-        sort($found);
-
-        return $found;
     }
 
     /**
@@ -284,231 +201,10 @@ class StatusCommand extends Command
     private function collectHealth(): array
     {
         return [
-            'orphan_records' => $this->countOrphans(),
-            'invalid_slot_records' => $this->countInvalidSlots(),
+            'orphan_records' => $this->totalForQueries($this->orphanQueries()),
+            'invalid_slot_records' => $this->totalForQueries($this->invalidSlotQueries()),
             'total_vectors' => Embedding::query()->count(),
         ];
-    }
-
-    private function countOrphans(): int
-    {
-        $sum = 0;
-
-        $types = Embedding::query()
-            ->select('embeddable_type')
-            ->distinct()
-            ->pluck('embeddable_type');
-
-        foreach ($types as $type) {
-            $type = (string) $type;
-
-            if (! class_exists($type)) {
-                $sum += Embedding::query()->where('embeddable_type', $type)->count();
-
-                continue;
-            }
-
-            $instance = new $type();
-            $modelConnection = $instance->getConnection()->getName();
-            $embeddingConnection = (new Embedding())->getConnection()->getName();
-
-            if ($modelConnection === $embeddingConnection) {
-                $modelTable = $instance->getTable();
-                $modelKey = $instance->getKeyName();
-                $embeddingTable = (new Embedding())->getTable();
-
-                $sum += Embedding::query()
-                    ->where('embeddable_type', $type)
-                    ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                        $q->selectRaw('1')
-                            ->from($modelTable)
-                            ->whereColumn(
-                                "{$modelTable}.{$modelKey}",
-                                "{$embeddingTable}.embeddable_id",
-                            );
-                    })
-                    ->count();
-
-                continue;
-            }
-
-            // Cross-connection — JOIN-style subqueries do not work across
-            // databases. Pluck the (usually small) distinct embeddable_id
-            // set from the embedding side, verify which still exist on the
-            // model side, and count the difference. Reverses the naive
-            // direction (model → embedding) so we never ship a multi-thousand
-            // IN clause to the embedding database for types whose model
-            // table is large but barely embedded.
-            $distinctEmbeddedIds = Embedding::query()
-                ->where('embeddable_type', $type)
-                ->distinct()
-                ->pluck('embeddable_id')
-                ->all();
-
-            if (empty($distinctEmbeddedIds)) {
-                continue;
-            }
-
-            $existingIds = $instance->getConnection()
-                ->table($instance->getTable())
-                ->whereIn($instance->getKeyName(), $distinctEmbeddedIds)
-                ->pluck($instance->getKeyName())
-                ->all();
-
-            $orphanIds = array_values(array_diff($distinctEmbeddedIds, $existingIds));
-
-            if (empty($orphanIds)) {
-                continue;
-            }
-
-            $sum += Embedding::query()
-                ->where('embeddable_type', $type)
-                ->whereIn('embeddable_id', $orphanIds)
-                ->count();
-        }
-
-        return $sum;
-    }
-
-    private function countInvalidSlots(): int
-    {
-        $rows = Embedding::query()
-            ->select('embeddable_type', 'slot')
-            ->distinct()
-            ->get();
-
-        $slotsByType = [];
-        foreach ($rows as $row) {
-            $slotsByType[$row->embeddable_type][] = $row->slot;
-        }
-
-        $sum = 0;
-
-        foreach ($slotsByType as $type => $slots) {
-            if (! class_exists($type) || ! is_a($type, HasEmbeddings::class, true)) {
-                continue;
-            }
-
-            $validSlots = array_keys((new $type())->embeddingSlotMap());
-
-            if (empty($validSlots)) {
-                continue;
-            }
-
-            $invalidSlots = array_values(array_diff($slots, $validSlots));
-
-            if (empty($invalidSlots)) {
-                continue;
-            }
-
-            $instance = new $type();
-            $modelConnection = $instance->getConnection()->getName();
-            $embeddingConnection = (new Embedding())->getConnection()->getName();
-
-            if ($modelConnection === $embeddingConnection) {
-                $modelTable = $instance->getTable();
-                $modelKey = $instance->getKeyName();
-                $embeddingTable = (new Embedding())->getTable();
-
-                $sum += Embedding::query()
-                    ->where('embeddable_type', $type)
-                    ->whereIn('slot', $invalidSlots)
-                    ->whereExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                        $q->selectRaw('1')
-                            ->from($modelTable)
-                            ->whereColumn(
-                                "{$modelTable}.{$modelKey}",
-                                "{$embeddingTable}.embeddable_id",
-                            );
-                    })
-                    ->count();
-
-                continue;
-            }
-
-            // Cross-connection — pluck the candidate IDs straight from the
-            // embedding side filtered by the invalid slot list, then verify
-            // existence on the model side. Same direction reversal as
-            // countOrphans() to keep IN clauses small.
-            $candidateIds = Embedding::query()
-                ->where('embeddable_type', $type)
-                ->whereIn('slot', $invalidSlots)
-                ->distinct()
-                ->pluck('embeddable_id')
-                ->all();
-
-            if (empty($candidateIds)) {
-                continue;
-            }
-
-            $existingIds = $instance->getConnection()
-                ->table($instance->getTable())
-                ->whereIn($instance->getKeyName(), $candidateIds)
-                ->pluck($instance->getKeyName())
-                ->all();
-
-            if (empty($existingIds)) {
-                continue;
-            }
-
-            $sum += Embedding::query()
-                ->where('embeddable_type', $type)
-                ->whereIn('slot', $invalidSlots)
-                ->whereIn('embeddable_id', $existingIds)
-                ->count();
-        }
-
-        return $sum;
-    }
-
-    /**
-     * @param  array<int, string>  $models
-     * @return array{models_with_payload: int, payload_rows: int, embedded_entities_missing_payload: int}
-     */
-    private function collectPayload(array $models): array
-    {
-        $withPayload = array_values(array_filter(
-            $models,
-            fn (string $modelClass) => (new $modelClass())->hasEmbeddingPayload(),
-        ));
-
-        $missing = 0;
-        foreach ($withPayload as $modelClass) {
-            $missing += $this->countEmbeddedEntitiesMissingPayload($modelClass);
-        }
-
-        return [
-            'models_with_payload' => count($withPayload),
-            'payload_rows' => Embeddable::query()->count(),
-            'embedded_entities_missing_payload' => $missing,
-        ];
-    }
-
-    private function countEmbeddedEntitiesMissingPayload(string $modelClass): int
-    {
-        $morphClass = (new $modelClass())->getMorphClass();
-        $embeddingTable = (new Embedding())->getTable();
-        $embeddablesTable = (new Embeddable())->getTable();
-
-        // Both tables always live on the embedding connection, so the
-        // whereNotExists never crosses databases regardless of where the
-        // model itself lives.
-        return Embedding::query()
-            ->where('embeddable_type', $morphClass)
-            ->whereNotExists(function ($q) use ($embeddablesTable, $embeddingTable) {
-                $q->selectRaw('1')
-                    ->from($embeddablesTable)
-                    ->whereColumn(
-                        "{$embeddablesTable}.embeddable_type",
-                        "{$embeddingTable}.embeddable_type",
-                    )
-                    ->whereColumn(
-                        "{$embeddablesTable}.embeddable_id",
-                        "{$embeddingTable}.embeddable_id",
-                    );
-            })
-            ->distinct()
-            ->count('embeddable_id');
     }
 
     /**
@@ -673,7 +369,7 @@ class StatusCommand extends Command
     private function renderHealth(array $health): void
     {
         $this->line('<comment>Health:</comment>');
-        $hint = ' <fg=gray>→ Run </><info>embedding:clean</info><fg=gray> to fix.</>';
+        $hint = ' <fg=gray>→ Run </><info>embedding:vector:clean</info><fg=gray> to fix.</>';
 
         $orphan = '  Orphan records (missing models):    ' . number_format($health['orphan_records']);
         if ($health['orphan_records'] > 0) {
@@ -688,23 +384,6 @@ class StatusCommand extends Command
         $this->line($invalid);
 
         $this->line('  Total stored vectors:               ' . number_format($health['total_vectors']));
-        $this->newLine();
-    }
-
-    /**
-     * @param  array{models_with_payload: int, payload_rows: int, embedded_entities_missing_payload: int}  $payload
-     */
-    private function renderPayload(array $payload): void
-    {
-        $this->line('<comment>Payload:</comment>');
-        $this->line('  Models with payload:                ' . number_format($payload['models_with_payload']));
-        $this->line('  Payload records:                    ' . number_format($payload['payload_rows']));
-
-        $missing = '  Embedded entities missing payload:  ' . number_format($payload['embedded_entities_missing_payload']);
-        if ($payload['embedded_entities_missing_payload'] > 0) {
-            $missing .= ' <fg=gray>→ Run </><info>embedding:generate --payload-only</info><fg=gray> to backfill.</>';
-        }
-        $this->line($missing);
         $this->newLine();
     }
 

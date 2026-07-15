@@ -297,59 +297,72 @@ public function embedded(Post $post, string $slot): void { ... }
 
 Laravel events (`ModelEmbedding` / `ModelEmbedded`) each carry `$model`, `$embedding` (ModelEmbedded only), and `$slot`.
 
-## Artisan Command
+## Artisan Commands
+
+The CLI mirrors the two write paths: `embedding:vector:*` only touches `embeddings`, `embedding:payload:*` only touches `embeddables`. Two umbrella commands (`embedding:clear`, `embedding:clean`) hit both tables for full-reset / full-cleanup. Command classes live in `src/Console/Commands/Vector/`, `src/Console/Commands/Payload/` and (umbrellas) `src/Console/Commands/`; shared logic (model discovery/validation, orphan / invalid-slot / stale-payload query builders, chunked processing and deletion) is in `src/Console/Commands/Concerns/` traits.
 
 ```bash
-php artisan embedding:generate                                      # auto-discover models in app/Models
-php artisan embedding:generate "App\Models\Post"                    # missing slots only
-php artisan embedding:generate "App\Models\Post" --slot=title       # specific slot only
-php artisan embedding:generate "App\Models\Post" --limit=100        # at most 100 records per slot
-php artisan embedding:generate "App\Models\Post" --chunk=500        # fetch records 500 at a time
-php artisan embedding:generate "App\Models\Post" --sync             # generate inline (no queue)
-php artisan embedding:generate "App\Models\Post" --force            # regenerate all
-php artisan embedding:generate --dry-run                            # report counts, dispatch nothing
-php artisan embedding:generate -v                                   # show stack traces / discovery skips
-php artisan embedding:generate --payload-only                       # backfill embeddables rows — no AI, no vectors
+php artisan embedding:vector:generate                               # auto-discover models in app/Models
+php artisan embedding:vector:generate "App\Models\Post"             # missing slots only
+php artisan embedding:vector:generate "App\Models\Post" --slot=title # specific slot only
+php artisan embedding:vector:generate "App\Models\Post" --limit=100 # at most 100 records per slot
+php artisan embedding:vector:generate "App\Models\Post" --chunk=500 # fetch records 500 at a time
+php artisan embedding:vector:generate "App\Models\Post" --sync      # generate inline (no queue)
+php artisan embedding:vector:generate "App\Models\Post" --force     # regenerate all
+php artisan embedding:vector:generate --dry-run                     # report counts, dispatch nothing
+php artisan embedding:vector:generate -v                            # show stack traces / discovery skips
 ```
-
-`--payload-only` is idempotent (missing-row query; cross-connection falls back to pluck+reject), errors when combined with `--slot`, `--force` refreshes existing rows, `--sync` upserts inline via `syncEmbeddingPayload()` instead of dispatching `SyncModelPayload`. Payload-less models warn and count 0.
 
 Without `--slot`, all defined slots are processed independently (each has its own "missing" query). When the model argument is omitted, the command scans `app/Models` (or `app/`) for any class implementing `HasEmbeddings`, prompts for confirmation, and processes them sequentially — failures on one model do not stop the others; a summary list is printed at the end.
 
 ```bash
-php artisan embedding:clear "App\Models\Post"                       # delete every embedding for Post
-php artisan embedding:clear "App\Models\Post" --slot=title          # delete only the title slot
-php artisan embedding:clear --slot=title --all                      # delete the title slot across every model
-php artisan embedding:clear --all                                   # truncate the entire table
-php artisan embedding:clear "App\Models\Post" --chunk=500           # 500 rows per delete batch (progress bar)
-php artisan embedding:clear "App\Models\Post" --force               # skip confirmation
-php artisan embedding:clear "App\Models\Post" --dry-run             # report counts, delete nothing
+php artisan embedding:payload:sync                                  # backfill embeddables rows — no AI, no vectors
+php artisan embedding:payload:sync "App\Models\Venue" --force       # re-sync existing rows too
+php artisan embedding:payload:sync "App\Models\Venue" --sync        # upsert inline via syncEmbeddingPayload()
 ```
 
-`embedding:clear` requires either a model class or `--all` (the two cannot be combined). Without `--force` it prompts for confirmation. The `--all` + no-slot path truncates **both** tables for speed; everything else uses a chunked `chunkById` + `whereIn DELETE` with a progress bar. Slot-scoped (`--slot`) clears never touch `embeddables` — the payload is entity-level. Messages append "... and N payload record(s)" only when payload rows are involved.
+`embedding:payload:sync` is idempotent (missing-row query; cross-connection falls back to pluck+reject), has no `--slot` (payload is entity-level), `--force` refreshes existing rows, `--sync` upserts inline via `syncEmbeddingPayload()` instead of dispatching `SyncModelPayload`. Payload-less models warn and count 0. Supports `--limit`, `--chunk`, `--dry-run` and auto-discovery like `vector:generate`.
 
 ```bash
-php artisan embedding:clean                                         # remove orphan + invalid-slot + stale payload records
-php artisan embedding:clean --orphans-only                          # only delete records whose model class is missing or whose row was deleted
-php artisan embedding:clean --invalid-slots-only                    # only delete records whose slot is no longer in embeddingSlotMap()
-php artisan embedding:clean --payload-only                          # only delete stale embeddables rows
+php artisan embedding:vector:clear "App\Models\Post"                # delete every embedding for Post (payload untouched)
+php artisan embedding:vector:clear "App\Models\Post" --slot=title   # delete only the title slot
+php artisan embedding:vector:clear --slot=title --all               # delete the title slot across every model
+php artisan embedding:vector:clear --all                            # truncate the embeddings table
+php artisan embedding:payload:clear "App\Models\Venue"              # delete Venue payload rows (vectors untouched)
+php artisan embedding:payload:clear --all                           # truncate the embeddables table
+php artisan embedding:clear "App\Models\Venue"                      # umbrella: embeddings + payload rows for Venue
+php artisan embedding:clear --all                                   # umbrella: truncate both tables
+```
+
+All clear commands require either a model class or `--all` (the two cannot be combined), prompt without `--force`, support `--chunk` and `--dry-run`. `--all` (with no other filter) truncates; everything else uses a chunked `chunkById` + `whereIn DELETE` with a progress bar. `--slot` exists only on `vector:clear` — the umbrella rejects it (payload is entity-level). The umbrella's messages append "... and N payload record(s)" only when payload rows are involved.
+
+```bash
+php artisan embedding:vector:clean                                  # remove orphan + invalid-slot records (payload untouched)
+php artisan embedding:vector:clean --orphans-only                   # only delete records whose model class is missing or whose row was deleted
+php artisan embedding:vector:clean --invalid-slots-only             # only delete records whose slot is no longer in embeddingSlotMap()
+php artisan embedding:payload:clean                                 # remove stale embeddables rows (vectors untouched)
+php artisan embedding:clean                                         # umbrella: orphan + invalid-slot + stale payload records
 php artisan embedding:clean --chunk=500                             # 500 rows per delete batch (progress bar)
 php artisan embedding:clean --force                                 # skip confirmation
 php artisan embedding:clean --dry-run                               # report findings, delete nothing
 ```
 
-`embedding:clean` walks distinct `embeddable_type` values, classifies each as orphan (class missing or row deleted) or invalid-slot (slot not present in the model's `embeddingSlotMap()`), then deletes the union with a chunked progress bar. Models whose `embeddingSlotMap()` returns an empty array are skipped for the invalid-slot pass — we do not delete records for a model that simply has no slots defined. The orphan scan also covers `embeddables` (class missing / row deleted / model no longer defines a payload). The three `--*-only` flags are mutually exclusive. Soft-deleted rows count as "exists" via a Query Builder subquery (keep mode preserves the payload). Output units are "record(s)" — the deletion set is mixed.
+The clean commands walk distinct `embeddable_type` values, classify each as orphan (class missing or row deleted) or invalid-slot (slot not present in the model's `embeddingSlotMap()`), then delete the union with a chunked progress bar. Models whose `embeddingSlotMap()` returns an empty array are skipped for the invalid-slot pass — we do not delete records for a model that simply has no slots defined. Stale `embeddables` rows (class missing / row deleted / model no longer defines a payload) belong to `payload:clean`; the umbrella runs all three passes. The two `--*-only` flags on `vector:clean` are mutually exclusive; the umbrella takes no filter flags. Soft-deleted rows count as "exists" via a Query Builder subquery (keep mode preserves the payload). `vector:clean` reports "embedding(s)", `payload:clean` reports "payload record(s)", the umbrella reports "record(s)" — its deletion set is mixed.
 
 ```bash
-php artisan embedding:status                                        # full report (configuration, coverage, health, storage)
-php artisan embedding:status "App\Models\Post"                      # restrict to one model
-php artisan embedding:status "App\Models\Post" --slot=title         # restrict to one slot
-php artisan embedding:status --json                                 # machine-readable output
+php artisan embedding:vector:status                                 # vector report (configuration, coverage, health, storage)
+php artisan embedding:vector:status "App\Models\Post"               # restrict to one model
+php artisan embedding:vector:status "App\Models\Post" --slot=title  # restrict to one slot
+php artisan embedding:vector:status --json                          # machine-readable output
+php artisan embedding:payload:status                                # payload report (configuration, coverage, health)
+php artisan embedding:payload:status "App\Models\Venue" --json      # restrict to one model, machine-readable
 ```
 
-`embedding:status` is read-only. It prints five sections (the four below plus **Payload** — models with payload definitions, `embeddables` row count, embedded entities missing a payload row (counted per entity via distinct `embeddable_id`, not per slot; both tables live on the embedding connection so the `whereNotExists` never crosses connections), with a `embedding:generate --payload-only` backfill hint in human output and a `payload` block in JSON): **Configuration** (a single Setting / Value / Detail / Note table covering similarity driver, vector dimensions, DB / queue connections, plus the resolved AI Embedding/Rerank Provider + Model — pulled from `laravel/ai` via `Ai::fakeableEmbeddingProvider($name)->defaultEmbeddingsModel()` and the rerank counterpart; `n/a` when unconfigured or when the provider class throws), **Model Coverage** (per-slot Records / Embedded / Coverage table — coverage uses the same `whereDoesntHave('embeddings', …)` logic as `embedding:generate`'s "missing" pass), **Health** (orphan and invalid-slot counts derived from `CleanCommand` queries, plus `Embedding::count()`), and **Storage** (driver-specific bytes via the `VectorStoreMetrics` contract). The JSON output keeps `configuration` and `ai` as separate top-level blocks so monitoring scripts that already parse them are unaffected. Any metric the contract cannot supply is rendered as `n/a`; the command never fails because of a missing storage figure.
+Both status commands are read-only. `embedding:vector:status` prints four sections: **Configuration** (a single Setting / Value / Detail / Note table covering similarity driver, vector dimensions, DB / queue connections, plus the resolved AI Embedding/Rerank Provider + Model — pulled from `laravel/ai` via `Ai::fakeableEmbeddingProvider($name)->defaultEmbeddingsModel()` and the rerank counterpart; `n/a` when unconfigured or when the provider class throws), **Model Coverage** (per-slot Records / Embedded / Coverage table — coverage uses the same `whereDoesntHave('embeddings', …)` logic as `vector:generate`'s "missing" pass), **Health** (orphan and invalid-slot counts from the shared health-query traits, plus `Embedding::count()`, with an `embedding:vector:clean` hint) and **Storage** (driver-specific bytes via the `VectorStoreMetrics` contract). Its JSON output keeps `configuration` and `ai` as separate top-level blocks and no longer contains a `payload` block.
 
-`VectorStoreMetrics` (`src/Contracts/VectorStoreMetrics.php`) is the read-side counterpart of `VectorStore`. `snapshot()` returns `['rows' => int, 'bytes' => int|null, 'data_bytes' => int|null, 'index_bytes' => int|null]` — `rows` is always an int, byte fields are `int|null` (null = driver cannot supply). The core package binds `JsonVectorStoreMetrics` by default — it returns `Embedding::count()` for `rows` and `null` for every byte field. DB driver packages override the binding in their `register()` (`MysqlVectorStoreMetrics`, `PgsqlVectorStoreMetrics`, …) to add native byte figures. When `snapshot()` throws, `embedding:status` silently falls back to `n/a` and exits 0; passing `-v` surfaces the underlying exception message. Programmatic callers can call `app(VectorStoreMetrics::class)->snapshot()` directly — the default binding guarantees a result.
+`embedding:payload:status` prints **Configuration** (embeddables table, sync-payload queue), **Model Coverage** (per-model Records / With Payload / Coverage — payload-less models get a "no payload defined" note) and **Health** (payload row count, stale rows with an `embedding:payload:clean` hint, embedded entities missing a payload row — counted per entity via distinct `embeddable_id`, not per slot; both tables live on the embedding connection so the `whereNotExists` never crosses connections — with an `embedding:payload:sync` backfill hint). It has no `--slot` option.
+
+`VectorStoreMetrics` (`src/Contracts/VectorStoreMetrics.php`) is the read-side counterpart of `VectorStore`. `snapshot()` returns `['rows' => int, 'bytes' => int|null, 'data_bytes' => int|null, 'index_bytes' => int|null]` — `rows` is always an int, byte fields are `int|null` (null = driver cannot supply). The core package binds `JsonVectorStoreMetrics` by default — it returns `Embedding::count()` for `rows` and `null` for every byte field. DB driver packages override the binding in their `register()` (`MysqlVectorStoreMetrics`, `PgsqlVectorStoreMetrics`, …) to add native byte figures. When `snapshot()` throws, `embedding:vector:status` silently falls back to `n/a` and exits 0; passing `-v` surfaces the underlying exception message. Programmatic callers can call `app(VectorStoreMetrics::class)->snapshot()` directly — the default binding guarantees a result.
 
 ## Horizon Tags
 
