@@ -175,7 +175,7 @@ class StatusCommand extends Command
             'auto_detected_from' => $autoFrom,
             'vector_dimensions' => (int) config('embedding.dimensions'),
             'db_connection' => config('embedding.database.connection'),
-            'db_table' => config('embedding.database.table'),
+            'db_table' => config('embedding.database.embeddings_table'),
             'queue_connection' => config('embedding.queue.connection'),
             'queue_name' => config('embedding.queue.name'),
         ];

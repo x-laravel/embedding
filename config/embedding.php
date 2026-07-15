@@ -34,16 +34,19 @@ return [
     | Database
     |--------------------------------------------------------------------------
     |
-    | Here you may configure the database connection and table name used to
+    | Here you may configure the database connection and table names used to
     | store embeddings. By default the application's primary connection and
     | an "embeddings" table are used, but you may point to a dedicated
-    | database (e.g. one with pgvector support) when needed.
+    | database (e.g. one with pgvector support) when needed. The
+    | "embeddables" table holds one payload record per entity and is used
+    | for filtered similarity search.
     |
     */
 
     'database' => [
         'connection' => env('EMBEDDINGS_DATABASE_CONNECTION', env('DB_CONNECTION', 'sqlite')),
-        'table' => env('EMBEDDINGS_DB_TABLE', 'embeddings'),
+        'embeddings_table' => env('EMBEDDINGS_DB_TABLE', 'embeddings'),
+        'embeddables_table' => env('EMBEDDABLES_DB_TABLE', 'embeddables'),
     ],
 
     /*

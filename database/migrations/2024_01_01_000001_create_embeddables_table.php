@@ -13,19 +13,18 @@ return new class extends Migration
 
     public function up(): void
     {
-        Schema::create(config('embedding.database.embeddings_table'), function (Blueprint $table) {
+        Schema::create(config('embedding.database.embeddables_table'), function (Blueprint $table) {
             $table->id();
             $table->morphs('embeddable');
-            $table->string('slot', 64)->default('default');
-            $table->json('vector');
+            $table->json('payload');
             $table->timestamps();
 
-            $table->unique(['embeddable_type', 'embeddable_id', 'slot']);
+            $table->unique(['embeddable_type', 'embeddable_id']);
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists(config('embedding.database.embeddings_table'));
+        Schema::dropIfExists(config('embedding.database.embeddables_table'));
     }
 };
