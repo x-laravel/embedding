@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Laravel\Ai\Embeddings;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\EmbeddingsResponse;
+use XLaravel\Embedding\Contracts\SearchRequest;
 use XLaravel\Embedding\Contracts\SimilarityDriver;
 use XLaravel\Embedding\Similarity\PhpDriver;
 use XLaravel\Embedding\SimilarityManager;
@@ -52,7 +53,7 @@ class SimilarityTest extends TestCase
 
         $manager->extend('custom', function () {
             return new class implements SimilarityDriver {
-                public function search(Model $prototype, array $queryVector, int $limit, float $threshold = 0.0, ?array $ids = null, string $slot = 'default'): Collection
+                public function search(Model $prototype, SearchRequest $request): Collection
                 {
                     return new Collection();
                 }

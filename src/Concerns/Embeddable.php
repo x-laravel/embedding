@@ -12,6 +12,7 @@ use XLaravel\Embedding\Attributes\EmbedOn;
 use XLaravel\Embedding\Attributes\EmbedPayload;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
 use XLaravel\Embedding\Contracts\PayloadStore;
+use XLaravel\Embedding\Contracts\SearchRequest;
 use XLaravel\Embedding\EmbeddingGenerator;
 use XLaravel\Embedding\Jobs\GenerateModelEmbedding;
 use XLaravel\Embedding\Observers\EmbeddingObserver;
@@ -417,7 +418,13 @@ trait Embeddable
             $ids = static::query()->tap($where)->pluck($prototype->getKeyName())->all();
         }
 
-        return app(SimilarityManager::class)->search(new static(), $queryVector, $limit, $threshold, $ids, $slot);
+        return app(SimilarityManager::class)->search(new static(), new SearchRequest(
+            vector: $queryVector,
+            limit: $limit,
+            threshold: $threshold,
+            ids: $ids,
+            slot: $slot,
+        ));
     }
 
     /**
