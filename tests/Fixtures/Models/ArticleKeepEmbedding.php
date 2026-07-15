@@ -19,7 +19,7 @@ class ArticleKeepEmbedding extends Model implements HasEmbeddings
 
     protected bool $keepEmbeddingOnSoftDelete = true;
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title.' '.$this->body;
     }

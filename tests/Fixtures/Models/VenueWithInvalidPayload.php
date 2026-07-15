@@ -23,7 +23,7 @@ class VenueWithInvalidPayload extends Model implements HasEmbeddings
 
     protected $fillable = ['name', 'description', 'province_id', 'category_id', 'active', 'code'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->name;
     }

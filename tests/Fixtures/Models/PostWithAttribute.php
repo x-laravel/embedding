@@ -16,7 +16,7 @@ class PostWithAttribute extends Model implements HasEmbeddings
 
     protected $fillable = ['title', 'body', 'status'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title.' '.$this->body;
     }

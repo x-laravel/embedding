@@ -38,14 +38,14 @@ EmbeddingObserver (saved/deleted/restored/forceDeleted)
     └─► model->slotsToEmbed(changedKeys) → ['title', 'full']
             └─► dispatch(GenerateModelEmbedding) × per slot
                     └─► EmbeddingGenerator::generate($model, $slot)
-                            ├─► resolveText() → toEmbeddingText()[$slot]
+                            ├─► resolveText() → toEmbeddingText($slot)
                             ├─► fireModelEvent('embedding', $slot) + event(ModelEmbedding)
                             ├─► Embeddings::for([text])->generate()   ← laravel/ai
                             ├─► VectorStore::store($model, $vector, $slot)
                             └─► fireModelEvent('embedded', $slot) + event(ModelEmbedded)
 ```
 
-**`EmbeddingGenerator`** (`src/EmbeddingGenerator.php`) is the single point where `laravel/ai` is called. Resolves `VectorStore` from the container for persistence. `resolveText()` handles both string and array returns from `toEmbeddingText()`.
+**`EmbeddingGenerator`** (`src/EmbeddingGenerator.php`) is the single point where `laravel/ai` is called. Resolves `VectorStore` from the container for persistence. `resolveText()` validates the requested slot against `embeddingSlotMap()` (undeclared slots throw; `'default'` stays callable on models with an empty slot map), then calls `toEmbeddingText($slot)` — only the requested slot's text is built.
 
 **`VectorStore` contract** (`src/Contracts/VectorStore.php`) decouples storage from generation. Core binds `JsonVectorStore` by default. DB-specific drivers (MySQL, pgsql, Oracle) override this binding in their `register()` method.
 
@@ -83,7 +83,7 @@ Core `Embedding` model (`src/Models/Embedding.php`) is intentionally DB-agnostic
 
 ## Model Requirements
 
-Any model using the trait must implement `HasEmbeddings`. `toEmbeddingText()` may return a `string` (single default slot) or an `array` (multiple named slots):
+Any model using the trait must implement `HasEmbeddings`. `toEmbeddingText(string $slot = 'default'): string` returns the text for **one** slot — the requested one. Single-slot models ignore the argument; multi-slot models branch on it (only the requested slot's text is built, never all slots):
 
 ```php
 // Single slot
@@ -92,7 +92,7 @@ class Post extends Model implements HasEmbeddings
     use Embeddable;
     protected array $embeddable = ['title', 'body'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title . ' ' . $this->body;
     }
@@ -108,13 +108,13 @@ class Post extends Model implements HasEmbeddings
         'full'  => ['title', 'body'],
     ];
 
-    public function toEmbeddingText(): string|array
+    public function toEmbeddingText(string $slot = 'default'): string
     {
-        return [
+        return match ($slot) {
             'title' => $this->title,
             'body'  => $this->body,
             'full'  => $this->title . ' ' . $this->body,
-        ];
+        };
     }
 }
 ```

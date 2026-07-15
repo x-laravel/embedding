@@ -20,12 +20,12 @@ class PostMultiSlot extends Model implements HasEmbeddings
         'full' => ['title', 'body'],
     ];
 
-    public function toEmbeddingText(): string|array
+    public function toEmbeddingText(string $slot = 'default'): string
     {
-        return [
+        return match ($slot) {
             'title' => $this->title,
             'body' => $this->body,
             'full' => $this->title.' '.$this->body,
-        ];
+        };
     }
 }

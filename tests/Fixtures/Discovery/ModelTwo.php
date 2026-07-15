@@ -12,7 +12,7 @@ class ModelTwo extends Model implements HasEmbeddings
 
     protected array $embeddable = ['title'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return (string) $this->title;
     }

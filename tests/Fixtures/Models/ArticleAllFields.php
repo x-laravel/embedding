@@ -17,7 +17,7 @@ class ArticleAllFields extends Model implements HasEmbeddings
 
     protected array $embeddable = ['*'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title.' '.$this->body;
     }

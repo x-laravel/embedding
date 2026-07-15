@@ -16,7 +16,7 @@ class PostNoEmbedding extends Model implements HasEmbeddings
 
     // $embeddable = [] by default — never embeds automatically
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title;
     }

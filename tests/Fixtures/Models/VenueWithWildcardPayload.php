@@ -22,7 +22,7 @@ class VenueWithWildcardPayload extends Model implements HasEmbeddings
 
     protected $casts = ['active' => 'boolean', 'meta' => 'array', 'code' => VenueCode::class];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->name;
     }

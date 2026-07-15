@@ -72,12 +72,6 @@ class Reranker
             return '';
         }
 
-        $result = $model->toEmbeddingText();
-
-        if (is_string($result)) {
-            return $result;
-        }
-
-        return (string) ($result[$slot] ?? '');
+        return $model->toEmbeddingText($slot);
     }
 }

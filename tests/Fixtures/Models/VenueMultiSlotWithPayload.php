@@ -21,11 +21,11 @@ class VenueMultiSlotWithPayload extends Model implements HasEmbeddings
         'full' => ['name', 'description'],
     ];
 
-    public function toEmbeddingText(): string|array
+    public function toEmbeddingText(string $slot = 'default'): string
     {
-        return [
+        return match ($slot) {
             'name' => $this->name,
             'full' => $this->name.' '.$this->description,
-        ];
+        };
     }
 }

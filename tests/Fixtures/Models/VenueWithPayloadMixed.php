@@ -20,7 +20,7 @@ class VenueWithPayloadMixed extends Model implements HasEmbeddings
 
     protected $casts = ['active' => 'boolean'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->name;
     }

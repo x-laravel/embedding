@@ -35,42 +35,26 @@ class EmbeddingGenerator
 
     private function resolveText(Model $model, string $slot): string
     {
-        $result = $model->toEmbeddingText();
+        $slotMap = $model->embeddingSlotMap();
 
-        if (is_string($result)) {
-            // Single-slot models only ever embed into 'default'. Accepting
-            // any other slot name silently writes a row at the requested
-            // slot with the same text — producing duplicate embeddings
-            // under different slot keys. Reject the call instead.
-            if ($slot !== 'default') {
-                $class = get_class($model);
-
-                throw new \InvalidArgumentException(
-                    "Slot '{$slot}' was requested but {$class}::toEmbeddingText() returns a string (single-slot model).\n".
-                    "  Fix: call embed()/embedSync() without a slot argument, or change toEmbeddingText() to return an array keyed by slot."
-                );
-            }
-
-            return $result;
-        }
-
-        if (! array_key_exists($slot, $result)) {
+        // Passing an undeclared slot straight through would let a
+        // toEmbeddingText() that ignores its argument silently write a
+        // duplicate row under the requested slot key. Reject the call
+        // instead. 'default' stays callable on models with no slot map
+        // (manual embed()/embedSync() on a model without $embeddable).
+        if (! array_key_exists($slot, $slotMap) && ! ($slot === 'default' && $slotMap === [])) {
             $class = get_class($model);
-            $returned = array_keys($result);
-            $expected = array_keys($model->embeddingSlotMap());
-
-            $returnedList = $returned === [] ? '(none)' : "['".implode("', '", $returned)."']";
+            $expected = array_keys($slotMap);
             $expectedList = $expected === [] ? '(none)' : "['".implode("', '", $expected)."']";
 
             throw new \InvalidArgumentException(
-                "Slot '{$slot}' was requested but is missing from {$class}::toEmbeddingText().\n".
-                "  Returned slots: {$returnedList}\n".
-                "  Expected slots (from embeddingSlotMap): {$expectedList}\n".
-                "  Fix: either return '{$slot}' from toEmbeddingText(), or remove it from \$embeddable / #[EmbedOn] in {$class}."
+                "Slot '{$slot}' was requested but is not defined for {$class}.\n".
+                "  Defined slots (from embeddingSlotMap): {$expectedList}\n".
+                "  Fix: call embed()/embedSync() with a defined slot, or add '{$slot}' to \$embeddable / #[EmbedOn] in {$class}."
             );
         }
 
-        return $result[$slot];
+        return $model->toEmbeddingText($slot);
     }
 
     private function truncate(string $text): string

@@ -28,11 +28,14 @@ A Laravel package that automatically generates and stores vector embeddings for 
 composer require x-laravel/embedding
 ```
 
-Run the migration:
+Publish and run the migrations (migrations are not loaded automatically):
 
 ```bash
+php artisan vendor:publish --tag=embedding-migrations
 php artisan migrate
 ```
+
+> Using a DB driver package (MySQL, pgsql, Oracle, …)? Publish the **driver** migrations instead — see [Database](#database).
 
 Optionally publish the config file:
 
@@ -44,7 +47,7 @@ php artisan vendor:publish --tag=embedding-config
 
 ### 1. Single-slot model
 
-For most use cases, return a string from `toEmbeddingText()` and list trigger fields in `$embeddable`:
+For most use cases, ignore the `$slot` argument and list trigger fields in `$embeddable`:
 
 ```php
 use Illuminate\Database\Eloquent\Model;
@@ -57,7 +60,7 @@ class Post extends Model implements HasEmbeddings
 
     protected array $embeddable = ['title', 'body'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title . ' ' . $this->body;
     }
@@ -66,7 +69,7 @@ class Post extends Model implements HasEmbeddings
 
 ### 2. Multi-slot model
 
-Return an array from `toEmbeddingText()` and use a nested `$embeddable` map to define which fields trigger each slot:
+Build the requested slot's text from the `$slot` argument and use a nested `$embeddable` map to define which fields trigger each slot. Only the requested slot's text is ever built — the other slots' texts are never computed:
 
 ```php
 class Post extends Model implements HasEmbeddings
@@ -79,13 +82,13 @@ class Post extends Model implements HasEmbeddings
         'full'  => ['title', 'body'],
     ];
 
-    public function toEmbeddingText(): string|array
+    public function toEmbeddingText(string $slot = 'default'): string
     {
-        return [
+        return match ($slot) {
             'title' => $this->title,
             'body'  => $this->body,
             'full'  => $this->title . ' ' . $this->body,
-        ];
+        };
     }
 }
 ```

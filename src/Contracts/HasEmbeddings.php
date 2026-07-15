@@ -15,12 +15,10 @@ interface HasEmbeddings
     public function hasEmbedding(string $slot = 'default'): bool;
 
     /**
-     * Return the text (or per-slot texts) used to generate embeddings.
-     * Return a string for a single default slot, or an associative array for multiple slots.
-     *
-     * @return string|array<string, string>
+     * Return the text used to generate the embedding for the given slot.
+     * Only the requested slot's text is built — never all slots at once.
      */
-    public function toEmbeddingText(): string|array;
+    public function toEmbeddingText(string $slot = 'default'): string;
 
     /**
      * Dispatch a job to generate the embedding for the given slot asynchronously.

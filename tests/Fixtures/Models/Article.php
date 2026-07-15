@@ -15,7 +15,7 @@ class Article extends Model implements HasEmbeddings
 
     protected array $embeddable = ['title', 'body'];
 
-    public function toEmbeddingText(): string
+    public function toEmbeddingText(string $slot = 'default'): string
     {
         return $this->title.' '.$this->body;
     }
