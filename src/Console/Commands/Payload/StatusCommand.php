@@ -3,9 +3,12 @@
 namespace XLaravel\Embedding\Console\Commands\Payload;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Number;
+use Throwable;
 use XLaravel\Embedding\Console\Commands\Concerns\BuildsPayloadHealthQueries;
 use XLaravel\Embedding\Console\Commands\Concerns\ResolvesEmbeddableModels;
 use XLaravel\Embedding\Console\Commands\Concerns\SumsQueryCounts;
+use XLaravel\Embedding\Contracts\PayloadStoreMetrics;
 use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 
@@ -19,7 +22,7 @@ class StatusCommand extends Command
         {model? : Restrict the report to a single HasEmbeddings model class}
         {--json : Emit a single JSON object suitable for CI / monitoring}';
 
-    protected $description = 'Show a read-only health report for the payload (embeddables) table (configuration, coverage, stale records). Vector health lives in embedding:vector:status.';
+    protected $description = 'Show a read-only health report for the payload (embeddables) table (configuration, coverage, stale records, storage size). Vector health lives in embedding:vector:status.';
 
     public function handle(): int
     {
@@ -32,12 +35,14 @@ class StatusCommand extends Command
         $configuration = $this->collectConfiguration();
         $coverage = $this->collectCoverage($models);
         $health = $this->collectHealth($models);
+        $storage = $this->collectStorage();
 
         if ($this->option('json')) {
             $this->line(json_encode([
                 'configuration' => $configuration,
                 'models' => $coverage,
                 'health' => $health,
+                'storage' => $storage,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION));
 
             return self::SUCCESS;
@@ -46,6 +51,7 @@ class StatusCommand extends Command
         $this->renderConfiguration($configuration);
         $this->renderCoverage($coverage);
         $this->renderHealth($health);
+        $this->renderStorage($storage);
 
         return self::SUCCESS;
     }
@@ -204,6 +210,35 @@ class StatusCommand extends Command
     }
 
     /**
+     * @return array{rows: int|null, bytes: int|null, data_bytes: int|null, index_bytes: int|null}
+     */
+    private function collectStorage(): array
+    {
+        $default = ['rows' => null, 'bytes' => null, 'data_bytes' => null, 'index_bytes' => null];
+
+        if (! $this->laravel->bound(PayloadStoreMetrics::class)) {
+            return $default;
+        }
+
+        try {
+            $snapshot = $this->laravel->make(PayloadStoreMetrics::class)->snapshot();
+        } catch (Throwable $e) {
+            if ($this->getOutput()->isVerbose()) {
+                $this->line("  <comment>storage metrics unavailable:</comment> {$e->getMessage()}");
+            }
+
+            return $default;
+        }
+
+        return [
+            'rows' => $snapshot['rows'] ?? null,
+            'bytes' => $snapshot['bytes'] ?? null,
+            'data_bytes' => $snapshot['data_bytes'] ?? null,
+            'index_bytes' => $snapshot['index_bytes'] ?? null,
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $config
      */
     private function renderConfiguration(array $config): void
@@ -284,5 +319,27 @@ class StatusCommand extends Command
         }
         $this->line($missing);
         $this->newLine();
+    }
+
+    /**
+     * @param  array{rows: int|null, bytes: int|null, data_bytes: int|null, index_bytes: int|null}  $storage
+     */
+    private function renderStorage(array $storage): void
+    {
+        $this->line('<comment>Storage:</comment>');
+        $this->line('  Rows:       ' . ($storage['rows'] === null ? 'n/a' : number_format($storage['rows'])));
+        $this->line('  Data:       ' . $this->formatBytes($storage['data_bytes']));
+        $this->line('  Index:      ' . $this->formatBytes($storage['index_bytes']));
+        $this->line('  Total size: ' . $this->formatBytes($storage['bytes']));
+        $this->newLine();
+    }
+
+    private function formatBytes(?int $bytes): string
+    {
+        if ($bytes === null) {
+            return 'n/a';
+        }
+
+        return Number::fileSize($bytes);
     }
 }

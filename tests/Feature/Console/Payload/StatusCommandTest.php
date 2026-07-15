@@ -3,6 +3,8 @@
 namespace XLaravel\Embedding\Tests\Feature\Console\Payload;
 
 use Illuminate\Support\Facades\Artisan;
+use RuntimeException;
+use XLaravel\Embedding\Contracts\PayloadStoreMetrics;
 use XLaravel\Embedding\Models\Embeddable as EmbeddableRecord;
 use XLaravel\Embedding\Models\Embedding;
 use XLaravel\Embedding\Tests\Fixtures\Models\Article;
@@ -130,6 +132,63 @@ class StatusCommandTest extends TestCase
         $payload = $this->statusJson(['model' => VenueMultiSlotWithPayload::class]);
 
         $this->assertSame(1, $payload['health']['embedded_entities_missing_payload']);
+    }
+
+    public function test_default_metrics_returns_eloquent_count_for_rows_and_null_bytes(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+        VenueWithPayload::create(['name' => 'B', 'province_id' => 6]);
+
+        $payload = $this->statusJson();
+
+        $this->assertSame(2, $payload['storage']['rows']);
+        $this->assertNull($payload['storage']['bytes']);
+        $this->assertNull($payload['storage']['data_bytes']);
+        $this->assertNull($payload['storage']['index_bytes']);
+
+        // Human-readable rendering should print "n/a" for the unsupported byte fields.
+        $this->artisan('embedding:payload:status')
+            ->expectsOutputToContain('Total size: n/a')
+            ->assertSuccessful();
+    }
+
+    public function test_storage_falls_back_to_na_when_metrics_implementation_throws(): void
+    {
+        $this->app->bind(PayloadStoreMetrics::class, fn () => new class implements PayloadStoreMetrics {
+            public function snapshot(): array
+            {
+                throw new RuntimeException('storage backend unreachable');
+            }
+        });
+
+        $payload = $this->statusJson();
+
+        $this->assertNull($payload['storage']['rows']);
+        $this->assertNull($payload['storage']['bytes']);
+        $this->assertNull($payload['storage']['data_bytes']);
+        $this->assertNull($payload['storage']['index_bytes']);
+    }
+
+    public function test_storage_uses_metrics_when_bound(): void
+    {
+        $this->app->bind(PayloadStoreMetrics::class, fn () => new class implements PayloadStoreMetrics {
+            public function snapshot(): array
+            {
+                return [
+                    'rows' => 480,
+                    'bytes' => 5242880,
+                    'data_bytes' => 4194304,
+                    'index_bytes' => 1048576,
+                ];
+            }
+        });
+
+        $payload = $this->statusJson();
+
+        $this->assertSame(480, $payload['storage']['rows']);
+        $this->assertSame(5242880, $payload['storage']['bytes']);
+        $this->assertSame(4194304, $payload['storage']['data_bytes']);
+        $this->assertSame(1048576, $payload['storage']['index_bytes']);
     }
 
     public function test_invalid_model_class_returns_failure(): void

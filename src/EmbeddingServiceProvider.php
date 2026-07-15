@@ -16,10 +16,12 @@ use XLaravel\Embedding\Console\Commands\Vector\GenerateCommand as VectorGenerate
 use XLaravel\Embedding\Console\Commands\Vector\StatusCommand as VectorStatusCommand;
 use XLaravel\Embedding\Contracts\EmbeddingClient;
 use XLaravel\Embedding\Contracts\PayloadStore;
+use XLaravel\Embedding\Contracts\PayloadStoreMetrics;
 use XLaravel\Embedding\Contracts\VectorStore;
 use XLaravel\Embedding\Contracts\VectorStoreMetrics;
 use XLaravel\Embedding\SimilarityManager;
 use XLaravel\Embedding\Storage\DatabasePayloadStore;
+use XLaravel\Embedding\Storage\DatabasePayloadStoreMetrics;
 use XLaravel\Embedding\Storage\JsonVectorStore;
 use XLaravel\Embedding\Storage\JsonVectorStoreMetrics;
 
@@ -37,6 +39,7 @@ class EmbeddingServiceProvider extends ServiceProvider
         $this->app->bind(VectorStore::class, JsonVectorStore::class);
         $this->app->bind(PayloadStore::class, DatabasePayloadStore::class);
         $this->app->bind(VectorStoreMetrics::class, JsonVectorStoreMetrics::class);
+        $this->app->bind(PayloadStoreMetrics::class, DatabasePayloadStoreMetrics::class);
         $this->app->bind(EmbeddingClient::class, AiEmbeddingClient::class);
     }
 

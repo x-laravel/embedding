@@ -25,7 +25,8 @@ v2 introduces **payload filtering**: models can publish a set of scalar attribut
 - CLI split into two namespaces mirroring the two write paths, plus umbrella commands:
   - `embedding:vector:generate` / `embedding:vector:clear` / `embedding:vector:clean` / `embedding:vector:status` — vector-side only, never touch `embeddables`. `vector:clear` keeps the `--slot` option; `vector:clean` keeps `--orphans-only` / `--invalid-slots-only`.
   - `embedding:payload:sync` — backfills `embeddables` rows without touching the AI provider or vectors; idempotent, honours `--dry-run`, `--force` refreshes existing rows, `--sync` upserts inline.
-  - `embedding:payload:clear` / `embedding:payload:clean` / `embedding:payload:status` — payload-side only, never touch `embeddings`. `payload:clean` removes stale rows (class missing / row deleted / model no longer defines a payload); `payload:status` reports per-model payload coverage, stale rows and embedded entities missing a payload row.
+  - `embedding:payload:clear` / `embedding:payload:clean` / `embedding:payload:status` — payload-side only, never touch `embeddings`. `payload:clean` removes stale rows (class missing / row deleted / model no longer defines a payload); `payload:status` reports per-model payload coverage, stale rows, embedded entities missing a payload row and storage size.
+- `PayloadStoreMetrics` contract — payload counterpart of `VectorStoreMetrics` (same `snapshot()` shape); core binds `DatabasePayloadStoreMetrics` (`Embeddable::count()` for rows, `null` bytes), driver packages can override for native byte figures.
   - `embedding:clear` / `embedding:clean` (umbrellas) — operate on **both** tables for full-reset / full-cleanup. `embedding:clear` takes no `--slot` (payload is entity-level); `embedding:clean` takes no `--*-only` filters.
 
 ### Changed

@@ -438,7 +438,7 @@ php artisan embedding:clean                                          # orphans +
 
 ### `embedding:vector:status` / `embedding:payload:status`
 
-Read-only health reports. `embedding:vector:status` covers configuration, per-slot coverage, orphan / invalid-slot counts, and storage size; `embedding:payload:status` covers payload configuration, per-model payload coverage, stale rows, and embedded entities missing a payload row (with an `embedding:payload:sync` backfill hint). Useful after deployments or as a periodic monitoring check.
+Read-only health reports. `embedding:vector:status` covers configuration, per-slot coverage, orphan / invalid-slot counts, and storage size; `embedding:payload:status` covers payload configuration, per-model payload coverage, stale rows, embedded entities missing a payload row (with an `embedding:payload:sync` backfill hint), and storage size. Useful after deployments or as a periodic monitoring check.
 
 ```bash
 php artisan embedding:vector:status                                  # report on every discovered HasEmbeddings model
@@ -487,7 +487,7 @@ Storage:
   Total size: 124.07 MB
 ```
 
-Storage metrics are read through the `VectorStoreMetrics` contract. The core package ships a default implementation (`JsonVectorStoreMetrics`) that returns the row count via Eloquent and `null` for every byte field — DB-specific driver packages override the binding in their service provider to provide native byte figures.
+Storage metrics are read through the `VectorStoreMetrics` contract (`embedding:vector:status`) and its payload counterpart `PayloadStoreMetrics` (`embedding:payload:status`). The core package ships default implementations (`JsonVectorStoreMetrics` / `DatabasePayloadStoreMetrics`) that return the row count via Eloquent and `null` for every byte field — DB-specific driver packages override the bindings in their service provider to provide native byte figures.
 
 You can read the same metrics from your own code:
 
