@@ -13,6 +13,7 @@ A Laravel package that automatically generates and stores vector embeddings for 
 - Define one **or more named slots** per model, each with its own text and trigger fields
 - When a field changes, only the slots that depend on that field are re-embedded
 - Embedding generation is handled by a queued job per slot — no blocking
+- Models can publish scalar attributes as a **payload** (`#[EmbedPayload]`) and similarity searches can filter on them at the database level via `filter:` — see [Payload filtering](#payload-filtering)
 - Similarity search is driver-based: PHP by default (works with any database), or native DB-level vector search via dedicated drivers for MySQL HeatWave, MariaDB 11.7+, PostgreSQL (pgvector), Oracle 26ai, SQL Server 2025, and Qdrant — see [Similarity Drivers](#similarity-drivers)
 - Optional second-stage [reranking](#reranking) reorders candidate results using `laravel/ai`'s rerank gateway (Cohere, Voyage, Jina)
 
@@ -115,6 +116,51 @@ class Post extends Model implements HasEmbeddings { ... }
 
 `$embeddable` and `#[EmbedOn]` merge — you can use both.
 
+### 4. Payload — filterable metadata (optional)
+
+Declare which attributes should be stored alongside the vectors for database-level filtering with `#[EmbedPayload]`:
+
+```php
+use XLaravel\Embedding\Attributes\EmbedPayload;
+
+#[EmbedOn('name')]
+#[EmbedPayload(['province_id', 'category_id', 'active'])]
+class Venue extends Model implements HasEmbeddings
+{
+    use Embeddable;
+
+    public function toEmbeddingText(string $slot = 'default'): string
+    {
+        return $this->name;
+    }
+}
+```
+
+The payload is written to a separate `embeddables` table — **one row per entity**, independent of slots — by a lightweight queued job (`SyncModelPayload`) whenever a payload field changes. Values must be scalars (int / string / bool / null) or arrays of scalars.
+
+Variants:
+
+```php
+// Wildcard — every attribute except the primary key, $hidden, and the except list.
+// Lenient mode: dates and backed enums are serialized, incompatible values are skipped.
+#[EmbedPayload('*')]
+#[EmbedPayload('*', except: ['internal_notes'])]
+
+// Computed values — define the method; it merges over the attribute fields and wins on conflicts.
+public function toEmbeddingPayload(): array
+{
+    return ['region' => $this->city->region_id];
+}
+```
+
+Values computed in `toEmbeddingPayload()` from non-column sources are invisible to dirty-tracking — call `$model->syncEmbeddingPayload()` yourself when they change:
+
+```php
+$venue->syncEmbeddingPayload();   // synchronous upsert; no-op if the model defines no payload
+```
+
+Models that define no payload never get an `embeddables` row.
+
 ## Usage
 
 ### Generating embeddings
@@ -173,6 +219,21 @@ $post->mostSimilar(limit: 5, slot: 'full');
 All similarity methods set a `similarity_score` attribute (float) on each returned model.
 
 `threshold` defaults to `0.0` — pass a value between `0.0` and `1.0` to filter low-scoring results.
+
+### Payload filtering
+
+`similarTo()`, `similarToText()` and `mostSimilar()` accept a `filter:` argument that constrains results by the values stored via [`#[EmbedPayload]`](#4-payload--filterable-metadata-optional). The filter runs inside the similarity SQL (a `whereExists` against the `embeddables` table) — never as a post-query PHP pass:
+
+```php
+Venue::similarTo($vector, limit: 300, slot: 'name',
+    filter: ['province_id' => 34]);                    // equality
+    filter: ['category_id' => [3, 7]]);                // IN (array value)
+    filter: ['province_id' => 34, 'active' => true]);  // AND (multiple keys)
+```
+
+Semantics are intentionally minimal — **equality, IN, and AND**. There is no range / OR / nested syntax. Comparisons are type-strict: `34` does not match `"34"`. Records without a payload row never match a filtered search.
+
+**`filter` vs `where`:** use `filter` for high-cardinality, indexable constraints that belong in the payload (tenant, region, category); use the `where` closure for one-off or complex Eloquent constraints on the model's own table. When both are given, both apply.
 
 ### Reranking
 
@@ -312,9 +373,12 @@ php artisan embedding:generate "App\Models\Post" --sync       # generate inline 
 php artisan embedding:generate "App\Models\Post" --force      # regenerate all records, all slots
 php artisan embedding:generate --dry-run                      # report counts, dispatch nothing
 php artisan embedding:generate -v                             # verbose: show stack traces / discovery skips
+php artisan embedding:generate --payload-only                 # backfill embeddables rows only — no AI, no vectors
 ```
 
 When the model argument is omitted, the command scans `app/Models` (or `app/`) for classes implementing `HasEmbeddings`, asks for confirmation if more than one is found, and processes them sequentially. Failures are isolated per model and a summary is printed at the end.
+
+`--payload-only` fills missing `embeddables` rows for models with payload definitions (idempotent; `--force` refreshes existing rows, `--sync` upserts inline instead of queueing). It cannot be combined with `--slot` — the payload is entity-level. Use it as the backfill step after upgrading to v2 or after adding `#[EmbedPayload]` to a model with existing records.
 
 ### `embedding:clear`
 
@@ -330,22 +394,27 @@ php artisan embedding:clear "App\Models\Post" --force         # skip the confirm
 php artisan embedding:clear "App\Models\Post" --dry-run       # report counts, delete nothing
 ```
 
+Model and `--all` scopes also delete the matching `embeddables` (payload) rows. Slot-scoped clears (`--slot=...`) leave the payload untouched — it is entity-level, not slot-level.
+
 ### `embedding:clean`
 
 Tidy up stale rows. By default deletes both **orphan** records (model class missing or model row no longer exists) and records whose `slot` is no longer defined in the model's `embeddingSlotMap()`.
 
 ```bash
-php artisan embedding:clean                                   # delete orphans + invalid-slot records
+php artisan embedding:clean                                   # delete orphans + invalid-slot + stale payload records
 php artisan embedding:clean --orphans-only                    # only remove orphans
 php artisan embedding:clean --invalid-slots-only              # only remove records with unknown slots
+php artisan embedding:clean --payload-only                    # only remove stale embeddables (payload) rows
 php artisan embedding:clean --chunk=500                       # 500 rows per delete batch (progress bar)
 php artisan embedding:clean --force                           # skip the confirmation prompt
 php artisan embedding:clean --dry-run                         # report findings, delete nothing
 ```
 
+The scan also covers the `embeddables` table: rows whose model class is missing, whose model row was deleted, or whose model no longer defines a payload are removed. The three `--*-only` flags are mutually exclusive.
+
 ### `embedding:status`
 
-Read-only health report — configuration, per-slot coverage, orphan / invalid-slot counts, and storage size. Useful after deployments or as a periodic monitoring check.
+Read-only health report — configuration, per-slot coverage, payload coverage, orphan / invalid-slot counts, and storage size. Useful after deployments or as a periodic monitoring check. The **Payload** section reports how many models define a payload, the `embeddables` row count, and how many embedded entities are missing a payload row (with a `embedding:generate --payload-only` backfill hint); the JSON output carries the same figures in a `payload` block.
 
 ```bash
 php artisan embedding:status                                  # report on every discovered HasEmbeddings model
@@ -413,26 +482,39 @@ $snapshot = app(VectorStoreMetrics::class)->snapshot();
 |---------------------|---------|-------------|
 | `EMBEDDING_DIMENSIONS` | `1536` | Vector size — must match your AI model's output |
 | `EMBEDDINGS_DATABASE_CONNECTION` | `DB_CONNECTION` | Dedicated DB connection for embeddings |
-| `EMBEDDINGS_DB_TABLE` | `embeddings` | Table name |
-| `QUEUE_CONNECTION` | `sync` | Queue connection for the generation job |
-| `EMBEDDING_QUEUE` | `embedding` | Queue name |
+| `EMBEDDINGS_DB_TABLE` | `embeddings` | Vector table name |
+| `EMBEDDABLES_DB_TABLE` | `embeddables` | Payload table name |
+| `QUEUE_CONNECTION` | `sync` | Queue connection for both job types |
+| `EMBEDDING_GENERATE_QUEUE` | `embedding.generate` | Queue name for vector generation jobs |
+| `EMBEDDING_SYNC_PAYLOAD_QUEUE` | `embedding.sync-payload` | Queue name for payload sync jobs |
+| `EMBEDDING_MAX_LENGTH` | `null` | Truncate input text before the API call (`null` = no limit) |
 | `EMBEDDING_SIMILARITY_DRIVER` | `auto` | Force a specific similarity driver (`php`, or an installed DB driver) |
+
+Payload jobs run on their own queue so the fast DB upsert never waits behind slow AI-bound vector jobs. Workers should listen to both, payload first:
+
+```bash
+php artisan queue:work --queue=embedding.sync-payload,embedding.generate
+```
+
+> **SQS:** queue names cannot contain dots — override both queue envs with hyphenated names.
 
 ## Database
 
 ```
-embeddings
-├── id
-├── embeddable_type   (polymorphic — Post, Article, etc.)
-├── embeddable_id
-├── slot              (varchar 64, default 'default')
-├── vector            (json)
-├── created_at
-└── updated_at
-                      unique: (embeddable_type, embeddable_id, slot)
+embeddings                                     embeddables
+├── id                                         ├── id
+├── embeddable_type   (polymorphic)            ├── embeddable_type   (polymorphic)
+├── embeddable_id                              ├── embeddable_id
+├── slot              (varchar 64)             ├── payload           (json)
+├── vector            (json)                   ├── created_at
+├── created_at                                 └── updated_at
+└── updated_at                                     unique: (embeddable_type, embeddable_id)
+    unique: (embeddable_type, embeddable_id, slot)
 ```
 
-The core migration creates the `vector` column as `json`. DB-specific drivers ship their own migration with a native vector column type (`VECTOR`, `vector`). Publish the driver migration **instead of** the core one when using a driver:
+The two tables are matched by the `(embeddable_type, embeddable_id)` morph pair — no foreign key. `embeddings` holds one row per model per slot; `embeddables` holds **one payload row per entity**, written only for models that define a payload. Vector writes and payload writes are fully independent paths.
+
+The core migrations create the `vector` and `payload` columns as `json`. DB-specific drivers ship their own migrations (same filenames) with native column types (`VECTOR`, `vector`, `JSONB`, …). Publish the driver migrations **instead of** the core ones when using a driver:
 
 ```bash
 # MySQL 9
