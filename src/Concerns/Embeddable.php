@@ -6,9 +6,12 @@ use Closure;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
+use InvalidArgumentException;
 use Laravel\Ai\Embeddings;
 use XLaravel\Embedding\Attributes\EmbedOn;
+use XLaravel\Embedding\Attributes\EmbedPayload;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
+use XLaravel\Embedding\Contracts\PayloadStore;
 use XLaravel\Embedding\EmbeddingGenerator;
 use XLaravel\Embedding\Jobs\GenerateModelEmbedding;
 use XLaravel\Embedding\Observers\EmbeddingObserver;
@@ -27,11 +30,20 @@ trait Embeddable
     protected static array $slotMapCache = [];
 
     /**
+     * Per-class cache for embeddingPayloadFields(). Derived purely from
+     * the #[EmbedPayload] attribute, so memoized like the slot map.
+     *
+     * @var array<class-string, array<int, string>>
+     */
+    protected static array $payloadFieldsCache = [];
+
+    /**
      * Boot the embeddable trait for a model.
      */
     public static function bootEmbeddable(): void
     {
         static::$slotMapCache[static::class] ??= static::computeEmbeddingSlotMap();
+        static::$payloadFieldsCache[static::class] ??= static::computeEmbeddingPayloadFields();
 
         $whenBootedCallback = function () {
             static::observe(new EmbeddingObserver());
@@ -59,6 +71,15 @@ trait Embeddable
     public static function flushEmbeddingSlotMapCache(): void
     {
         unset(static::$slotMapCache[static::class]);
+    }
+
+    /**
+     * Drop the cached payload field list for the calling class. The next
+     * call to embeddingPayloadFields() will recompute from #[EmbedPayload].
+     */
+    public static function flushEmbeddingPayloadFieldsCache(): void
+    {
+        unset(static::$payloadFieldsCache[static::class]);
     }
 
     /**
@@ -211,6 +232,128 @@ trait Embeddable
         }
 
         return $slots;
+    }
+
+    /**
+     * Return the flat column list declared via #[EmbedPayload]. Used for
+     * dirty detection — values computed inside toEmbeddingPayload() from
+     * non-column sources never appear here and therefore cannot trigger
+     * an automatic payload update; call syncEmbeddingPayload() for those.
+     *
+     * @return array<int, string>
+     */
+    public function embeddingPayloadFields(): array
+    {
+        return static::$payloadFieldsCache[static::class]
+            ??= static::computeEmbeddingPayloadFields();
+    }
+
+    /**
+     * Compute the payload field list from the #[EmbedPayload] attribute.
+     *
+     * @return array<int, string>
+     */
+    protected static function computeEmbeddingPayloadFields(): array
+    {
+        $reflection = new \ReflectionClass(static::class);
+        $attributes = $reflection->getAttributes(EmbedPayload::class);
+
+        if (empty($attributes)) {
+            return [];
+        }
+
+        return $attributes[0]->newInstance()->fields;
+    }
+
+    /**
+     * Determine if the model declares a payload — via #[EmbedPayload],
+     * a toEmbeddingPayload() method, or both. Models without a payload
+     * never get an embeddables record.
+     */
+    public function hasEmbeddingPayload(): bool
+    {
+        return ! empty($this->embeddingPayloadFields())
+            || method_exists($this, 'toEmbeddingPayload');
+    }
+
+    /**
+     * Resolve the payload for this model. #[EmbedPayload] columns are read
+     * through getAttribute() (accessors included); a toEmbeddingPayload()
+     * method is merged on top — the method wins on key collisions.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws \InvalidArgumentException When a value is neither scalar, null, nor an array of scalars
+     */
+    public function resolveEmbeddingPayload(): array
+    {
+        $payload = [];
+
+        foreach ($this->embeddingPayloadFields() as $field) {
+            $payload[$field] = $this->getAttribute($field);
+        }
+
+        if (method_exists($this, 'toEmbeddingPayload')) {
+            $payload = array_merge($payload, $this->toEmbeddingPayload());
+        }
+
+        foreach ($payload as $key => $value) {
+            if (! static::isValidPayloadValue($value)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Embedding payload value [%s] on [%s] must be a scalar, null, or an array of scalars — nested structures are not supported.',
+                    $key,
+                    static::class,
+                ));
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * A payload value must be scalar, null, or a flat array of scalars/nulls.
+     */
+    protected static function isValidPayloadValue(mixed $value): bool
+    {
+        if ($value === null || is_scalar($value)) {
+            return true;
+        }
+
+        if (! is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $item) {
+            if ($item !== null && ! is_scalar($item)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Determine if any #[EmbedPayload] column is among the changed keys.
+     *
+     * @param  array<int, string>  $changedKeys
+     */
+    public function payloadFieldsChanged(array $changedKeys): bool
+    {
+        return ! empty(array_intersect($changedKeys, $this->embeddingPayloadFields()));
+    }
+
+    /**
+     * Upsert this model's payload record immediately (no queue). Intended
+     * for payloads computed from non-column sources that dirty detection
+     * cannot see. No-op for models without a payload definition.
+     */
+    public function syncEmbeddingPayload(): void
+    {
+        if (! $this->hasEmbeddingPayload()) {
+            return;
+        }
+
+        app(PayloadStore::class)->upsert($this, $this->resolveEmbeddingPayload());
     }
 
     /**
