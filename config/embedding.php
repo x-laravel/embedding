@@ -58,11 +58,20 @@ return [
     | which connection and queue name to use. Set the connection to "sync"
     | to generate embeddings inline without a queue worker.
     |
+    | Payload updates run on their own queue so the fast DB upsert never
+    | waits behind slow AI-bound vector jobs (head-of-line blocking).
+    | Workers should listen to both:
+    | --queue=embedding.sync-payload,embedding.generate
+    |
+    | Note: SQS queue names do not allow dots — override both envs with
+    | hyphenated names when using the SQS driver.
+    |
     */
 
     'queue' => [
         'connection' => env('QUEUE_CONNECTION', 'sync'),
-        'name' => env('EMBEDDING_QUEUE', 'embedding'),
+        'generate' => env('EMBEDDING_GENERATE_QUEUE', 'embedding.generate'),
+        'sync_payload' => env('EMBEDDING_SYNC_PAYLOAD_QUEUE', 'embedding.sync-payload'),
     ],
 
     /*

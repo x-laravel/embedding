@@ -4,6 +4,8 @@ namespace XLaravel\Embedding\Observers;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use XLaravel\Embedding\Contracts\PayloadStore;
+use XLaravel\Embedding\Jobs\SyncModelPayload;
 
 class EmbeddingObserver
 {
@@ -59,8 +61,23 @@ class EmbeddingObserver
             return;
         }
 
-        foreach ($model->slotsToEmbed(array_keys($model->getChanges())) as $slot) {
+        $changedKeys = array_keys($model->getChanges());
+
+        foreach ($model->slotsToEmbed($changedKeys) as $slot) {
             $model->embed($slot);
+        }
+
+        // Payload dispatch is independent of slots. SyncModelPayload
+        // is the single writer of payload records — slot jobs never write
+        // them, so no per-slot race over the shared row can occur. The
+        // wasRecentlyCreated guard mirrors slotsToEmbed(): on insert
+        // getChanges() is empty; on a later update of the same instance
+        // changedKeys is non-empty and the field-based check runs instead.
+        $payloadDirty = $model->payloadFieldsChanged($changedKeys)
+            || ($model->wasRecentlyCreated && empty($changedKeys) && $model->hasEmbeddingPayload());
+
+        if ($payloadDirty) {
+            dispatch(new SyncModelPayload($model));
         }
     }
 
@@ -74,6 +91,7 @@ class EmbeddingObserver
         }
 
         $model->embeddings()->delete();
+        app(PayloadStore::class)->delete($model);
     }
 
     /**
@@ -89,6 +107,12 @@ class EmbeddingObserver
             foreach (array_keys($model->embeddingSlotMap()) as $slot) {
                 $model->embed($slot);
             }
+
+            // The payload row was removed on soft delete — rebuild it.
+            // Under keepEmbeddingOnSoftDelete the row was never deleted.
+            if ($model->hasEmbeddingPayload()) {
+                dispatch(new SyncModelPayload($model));
+            }
         }
     }
 
@@ -98,6 +122,7 @@ class EmbeddingObserver
     public function forceDeleted(Model $model): void
     {
         $model->embeddings()->delete();
+        app(PayloadStore::class)->delete($model);
     }
 
     /**

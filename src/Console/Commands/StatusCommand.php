@@ -177,7 +177,7 @@ class StatusCommand extends Command
             'db_connection' => config('embedding.database.connection'),
             'db_table' => config('embedding.database.embeddings_table'),
             'queue_connection' => config('embedding.queue.connection'),
-            'queue_name' => config('embedding.queue.name'),
+            'queue_name' => config('embedding.queue.generate'),
         ];
     }
 

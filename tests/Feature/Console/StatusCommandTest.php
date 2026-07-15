@@ -34,7 +34,7 @@ class StatusCommandTest extends TestCase
         $this->assertSame('sqlite', $payload['configuration']['db_connection']);
         $this->assertSame('embeddings', $payload['configuration']['db_table']);
         $this->assertSame('sync', $payload['configuration']['queue_connection']);
-        $this->assertSame('embedding', $payload['configuration']['queue_name']);
+        $this->assertSame('embedding.generate', $payload['configuration']['queue_name']);
     }
 
     public function test_marks_driver_as_forced_when_env_overrides_auto(): void

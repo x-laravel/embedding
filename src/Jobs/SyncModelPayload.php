@@ -8,19 +8,26 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use XLaravel\Embedding\EmbeddingGenerator;
+use XLaravel\Embedding\Contracts\PayloadStore;
 
-class GenerateModelEmbedding implements ShouldQueue
+/**
+ * The single writer of payload records. Vector jobs never touch the
+ * payload, so no per-slot race over the shared row can ever occur.
+ */
+class SyncModelPayload implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
      * Create a new job instance.
      */
-    public function __construct(protected Model $model, protected string $slot = 'default')
+    public function __construct(protected Model $model)
     {
         $this->onConnection(config('embedding.queue.connection', config('queue.default', 'sync')));
-        $this->onQueue(config('embedding.queue.generate', 'embedding.generate'));
+
+        // Dedicated queue: a fast DB upsert must not wait behind slow
+        // AI-bound vector jobs (head-of-line blocking).
+        $this->onQueue(config('embedding.queue.sync_payload', 'embedding.sync-payload'));
 
         // Defer dispatch until the surrounding DB transaction commits, so the
         // job never runs against a row that has not yet been persisted.
@@ -35,16 +42,18 @@ class GenerateModelEmbedding implements ShouldQueue
     public function tags(): array
     {
         return [
-            'slot:'.$this->slot,
+            'embedding',
+            'payload',
             get_class($this->model).':'.$this->model->getKey(),
         ];
     }
 
     /**
-     * Execute the job.
+     * Execute the job. The payload is resolved at run time, not at
+     * dispatch time, so the freshest attribute values win.
      */
-    public function handle(EmbeddingGenerator $generator): void
+    public function handle(PayloadStore $store): void
     {
-        $generator->generate($this->model, $this->slot);
+        $store->upsert($this->model, $this->model->resolveEmbeddingPayload());
     }
 }
