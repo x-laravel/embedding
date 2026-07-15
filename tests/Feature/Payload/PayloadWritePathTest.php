@@ -12,6 +12,7 @@ use XLaravel\Embedding\Tests\Fixtures\Models\Post;
 use XLaravel\Embedding\Tests\Fixtures\Models\VenueMultiSlotWithPayload;
 use XLaravel\Embedding\Tests\Fixtures\Models\VenueWithPayload;
 use XLaravel\Embedding\Tests\Fixtures\Models\VenueWithPayloadMethod;
+use XLaravel\Embedding\Tests\Fixtures\Models\VenueWithWildcardPayload;
 use XLaravel\Embedding\Tests\TestCase;
 
 class PayloadWritePathTest extends TestCase
@@ -206,5 +207,33 @@ class PayloadWritePathTest extends TestCase
 
         $this->assertNull($this->payloadRecord($venue));
         $this->assertSame(0, $venue->embeddings()->count());
+    }
+
+    public function test_wildcard_insert_writes_payload_row_without_hidden_columns(): void
+    {
+        $venue = VenueWithWildcardPayload::create([
+            'name' => 'Kafes',
+            'province_id' => 34,
+            'secret_token' => 's3cret',
+        ]);
+
+        $record = $this->payloadRecord($venue);
+
+        $this->assertNotNull($record);
+        $this->assertSame('Kafes', $record->payload['name']);
+        $this->assertSame(34, $record->payload['province_id']);
+        $this->assertArrayNotHasKey('secret_token', $record->payload);
+        $this->assertArrayNotHasKey('id', $record->payload);
+    }
+
+    public function test_wildcard_column_change_dispatches_sync_job(): void
+    {
+        $venue = VenueWithWildcardPayload::create(['name' => 'Kafes', 'province_id' => 34]);
+
+        Bus::fake([SyncModelPayload::class, GenerateModelEmbedding::class]);
+
+        $venue->update(['province_id' => 42]);
+
+        Bus::assertDispatched(SyncModelPayload::class);
     }
 }

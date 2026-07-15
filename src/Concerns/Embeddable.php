@@ -31,12 +31,13 @@ trait Embeddable
     protected static array $slotMapCache = [];
 
     /**
-     * Per-class cache for embeddingPayloadFields(). Derived purely from
-     * the #[EmbedPayload] attribute, so memoized like the slot map.
+     * Per-class cache for the #[EmbedPayload] attribute instance (null when
+     * the class declares none). Class metadata never varies between
+     * instances, so memoized like the slot map.
      *
-     * @var array<class-string, array<int, string>>
+     * @var array<class-string, EmbedPayload|null>
      */
-    protected static array $payloadFieldsCache = [];
+    protected static array $embedPayloadCache = [];
 
     /**
      * Boot the embeddable trait for a model.
@@ -44,7 +45,7 @@ trait Embeddable
     public static function bootEmbeddable(): void
     {
         static::$slotMapCache[static::class] ??= static::computeEmbeddingSlotMap();
-        static::$payloadFieldsCache[static::class] ??= static::computeEmbeddingPayloadFields();
+        static::embeddingPayloadAttribute();
 
         $whenBootedCallback = function () {
             static::observe(new EmbeddingObserver());
@@ -75,12 +76,12 @@ trait Embeddable
     }
 
     /**
-     * Drop the cached payload field list for the calling class. The next
-     * call to embeddingPayloadFields() will recompute from #[EmbedPayload].
+     * Drop the cached #[EmbedPayload] attribute for the calling class. The
+     * next call to embeddingPayloadFields() will recompute from reflection.
      */
     public static function flushEmbeddingPayloadFieldsCache(): void
     {
-        unset(static::$payloadFieldsCache[static::class]);
+        unset(static::$embedPayloadCache[static::class]);
     }
 
     /**
@@ -236,7 +237,9 @@ trait Embeddable
     }
 
     /**
-     * Return the flat column list declared via #[EmbedPayload]. Used for
+     * Return the flat column list declared via #[EmbedPayload]. A wildcard
+     * declaration ('*') expands to the instance's current attribute keys
+     * minus the primary key, hidden columns, and the except list. Used for
      * dirty detection — values computed inside toEmbeddingPayload() from
      * non-column sources never appear here and therefore cannot trigger
      * an automatic payload update; call syncEmbeddingPayload() for those.
@@ -245,25 +248,39 @@ trait Embeddable
      */
     public function embeddingPayloadFields(): array
     {
-        return static::$payloadFieldsCache[static::class]
-            ??= static::computeEmbeddingPayloadFields();
-    }
+        $attribute = static::embeddingPayloadAttribute();
 
-    /**
-     * Compute the payload field list from the #[EmbedPayload] attribute.
-     *
-     * @return array<int, string>
-     */
-    protected static function computeEmbeddingPayloadFields(): array
-    {
-        $reflection = new \ReflectionClass(static::class);
-        $attributes = $reflection->getAttributes(EmbedPayload::class);
-
-        if (empty($attributes)) {
+        if ($attribute === null) {
             return [];
         }
 
-        return $attributes[0]->newInstance()->fields;
+        if ($attribute->isWildcard()) {
+            return array_values(array_diff(
+                array_keys($this->getAttributes()),
+                [$this->getKeyName()],
+                $this->getHidden(),
+                $attribute->except,
+            ));
+        }
+
+        return array_values(array_diff($attribute->fields, $attribute->except));
+    }
+
+    /**
+     * Resolve (and memoize) the #[EmbedPayload] attribute instance.
+     */
+    protected static function embeddingPayloadAttribute(): ?EmbedPayload
+    {
+        if (! array_key_exists(static::class, static::$embedPayloadCache)) {
+            $reflection = new \ReflectionClass(static::class);
+            $attributes = $reflection->getAttributes(EmbedPayload::class);
+
+            static::$embedPayloadCache[static::class] = empty($attributes)
+                ? null
+                : $attributes[0]->newInstance();
+        }
+
+        return static::$embedPayloadCache[static::class];
     }
 
     /**
@@ -273,7 +290,7 @@ trait Embeddable
      */
     public function hasEmbeddingPayload(): bool
     {
-        return ! empty($this->embeddingPayloadFields())
+        return static::embeddingPayloadAttribute() !== null
             || method_exists($this, 'toEmbeddingPayload');
     }
 
@@ -282,16 +299,37 @@ trait Embeddable
      * through getAttribute() (accessors included); a toEmbeddingPayload()
      * method is merged on top — the method wins on key collisions.
      *
+     * Wildcard mode is lenient where the explicit list is strict: dates are
+     * serialized via serializeDate(), backed enums collapse to their value,
+     * and anything still payload-incompatible is skipped, because '*' means
+     * "take what fits", not "these exact columns must fit".
+     *
      * @return array<string, mixed>
      *
-     * @throws \InvalidArgumentException When a value is neither scalar, null, nor an array of scalars
+     * @throws \InvalidArgumentException When an explicitly declared value is neither scalar, null, nor an array of scalars
      */
     public function resolveEmbeddingPayload(): array
     {
+        $wildcard = static::embeddingPayloadAttribute()?->isWildcard() ?? false;
+
         $payload = [];
 
         foreach ($this->embeddingPayloadFields() as $field) {
-            $payload[$field] = $this->getAttribute($field);
+            $value = $this->getAttribute($field);
+
+            if ($wildcard) {
+                if ($value instanceof \DateTimeInterface) {
+                    $value = $this->serializeDate($value);
+                } elseif ($value instanceof \BackedEnum) {
+                    $value = $value->value;
+                }
+
+                if (! static::isValidPayloadValue($value)) {
+                    continue;
+                }
+            }
+
+            $payload[$field] = $value;
         }
 
         if (method_exists($this, 'toEmbeddingPayload')) {

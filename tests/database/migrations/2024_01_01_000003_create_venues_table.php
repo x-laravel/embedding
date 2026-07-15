@@ -16,6 +16,8 @@ return new class extends Migration
             $table->unsignedInteger('category_id')->nullable();
             $table->boolean('active')->default(true);
             $table->string('code')->nullable();
+            $table->string('secret_token')->nullable();
+            $table->json('meta')->nullable();
             $table->timestamps();
             $table->softDeletes();
         });
