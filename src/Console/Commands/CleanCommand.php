@@ -5,38 +5,50 @@ namespace XLaravel\Embedding\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
+use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 
 class CleanCommand extends Command
 {
     protected $signature = 'embedding:clean
-        {--orphans-only : Only delete orphan records (model class missing or row deleted)}
-        {--invalid-slots-only : Only delete records whose slot is no longer defined on the model}
+        {--orphans-only : Only delete orphan embeddings (model class missing or row deleted)}
+        {--invalid-slots-only : Only delete embeddings whose slot is no longer defined on the model}
+        {--payload-only : Only delete stale payload (embeddables) records}
         {--chunk=1000 : Number of records per delete batch}
         {--force : Skip confirmation prompt}
         {--dry-run : Report findings without deleting}';
 
-    protected $description = 'Clean orphan embeddings and records pointing at slots that no longer exist on their model.';
+    protected $description = 'Clean orphan embeddings, records pointing at slots that no longer exist on their model, and stale payload records.';
 
     public function handle(): int
     {
         $orphansOnly = (bool) $this->option('orphans-only');
         $invalidSlotsOnly = (bool) $this->option('invalid-slots-only');
+        $payloadOnly = (bool) $this->option('payload-only');
 
-        if ($orphansOnly && $invalidSlotsOnly) {
-            $this->error('--orphans-only and --invalid-slots-only cannot be combined.');
+        $exclusive = array_keys(array_filter([
+            '--orphans-only' => $orphansOnly,
+            '--invalid-slots-only' => $invalidSlotsOnly,
+            '--payload-only' => $payloadOnly,
+        ]));
+
+        if (count($exclusive) > 1) {
+            $this->error(implode(' and ', $exclusive).' cannot be combined.');
 
             return self::FAILURE;
         }
 
-        $cleanOrphans = ! $invalidSlotsOnly;
-        $cleanInvalidSlots = ! $orphansOnly;
+        $cleanOrphans = ! $invalidSlotsOnly && ! $payloadOnly;
+        $cleanInvalidSlots = ! $orphansOnly && ! $payloadOnly;
+        $cleanPayload = ! $orphansOnly && ! $invalidSlotsOnly;
 
         $orphanQueries = $cleanOrphans ? $this->orphanQueries() : [];
         $invalidQueries = $cleanInvalidSlots ? $this->invalidSlotQueries() : [];
+        $payloadQueries = $cleanPayload ? $this->payloadQueries() : [];
 
         $orphanCount = $this->totalForQueries($orphanQueries);
         $invalidCount = $this->totalForQueries($invalidQueries);
+        $payloadCount = $this->totalForQueries($payloadQueries);
 
         if ($cleanOrphans) {
             $this->line('Orphan records: <comment>'.$orphanCount.'</comment>');
@@ -46,7 +58,11 @@ class CleanCommand extends Command
             $this->line('Invalid slot records: <comment>'.$invalidCount.'</comment>');
         }
 
-        $total = $orphanCount + $invalidCount;
+        if ($cleanPayload) {
+            $this->line('Stale payload records: <comment>'.$payloadCount.'</comment>');
+        }
+
+        $total = $orphanCount + $invalidCount + $payloadCount;
 
         if ($total === 0) {
             $this->info('Nothing to clean.');
@@ -55,21 +71,21 @@ class CleanCommand extends Command
         }
 
         if ($this->option('dry-run')) {
-            $this->info("Dry-run: would delete {$total} embedding(s).");
+            $this->info("Dry-run: would delete {$total} record(s).");
 
             return self::SUCCESS;
         }
 
         if (! $this->option('force')
-            && ! $this->confirm("Delete {$total} embedding(s)?", false)) {
+            && ! $this->confirm("Delete {$total} record(s)?", false)) {
             $this->line('Aborted.');
 
             return self::SUCCESS;
         }
 
-        $this->deleteWithProgress(array_merge($orphanQueries, $invalidQueries), $total);
+        $this->deleteWithProgress(array_merge($orphanQueries, $invalidQueries, $payloadQueries), $total);
 
-        $this->info("Deleted {$total} embedding(s).");
+        $this->info("Deleted {$total} record(s).");
 
         return self::SUCCESS;
     }
@@ -259,6 +275,98 @@ class CleanCommand extends Command
     }
 
     /**
+     * @return array<int, Builder>
+     */
+    private function payloadQueries(): array
+    {
+        $queries = [];
+
+        $types = Embeddable::query()
+            ->select('embeddable_type')
+            ->distinct()
+            ->pluck('embeddable_type');
+
+        foreach ($types as $type) {
+            $query = $this->payloadQueryForType((string) $type);
+
+            if ($query !== null) {
+                $queries[] = $query;
+            }
+        }
+
+        return $queries;
+    }
+
+    private function payloadQueryForType(string $type): ?Builder
+    {
+        if (! class_exists($type)) {
+            return Embeddable::query()->where('embeddable_type', $type);
+        }
+
+        $instance = new $type();
+
+        // A model that no longer declares a payload (attribute removed,
+        // method deleted, or trait dropped) leaves all of its rows stale —
+        // no search path can ever match them again.
+        if (! method_exists($instance, 'hasEmbeddingPayload') || ! $instance->hasEmbeddingPayload()) {
+            return Embeddable::query()->where('embeddable_type', $type);
+        }
+
+        $modelConnection = $instance->getConnection()->getName();
+        $payloadConnection = (new Embeddable())->getConnection()->getName();
+
+        if ($modelConnection === $payloadConnection) {
+            $modelTable = $instance->getTable();
+            $modelKey = $instance->getKeyName();
+            $embeddablesTable = (new Embeddable())->getTable();
+
+            // The subquery uses Query Builder so the SoftDeletes global scope
+            // does not apply — soft-deleted rows still count as "exists" and
+            // their preserved payload records are not misclassified as stale.
+            return Embeddable::query()
+                ->where('embeddable_type', $type)
+                ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddablesTable) {
+                    $q->selectRaw('1')
+                        ->from($modelTable)
+                        ->whereColumn(
+                            "{$modelTable}.{$modelKey}",
+                            "{$embeddablesTable}.embeddable_id",
+                        );
+                });
+        }
+
+        // Cross-connection — pluck the (single-row-per-entity, so small)
+        // embeddable_id set from the payload side, verify which still exist
+        // on the model side, and turn the difference into a delete query.
+        // Query Builder is used on the model side so the SoftDeletes scope
+        // does not strip soft-deleted rows.
+        $payloadIds = Embeddable::query()
+            ->where('embeddable_type', $type)
+            ->pluck('embeddable_id')
+            ->all();
+
+        if (empty($payloadIds)) {
+            return null;
+        }
+
+        $existingIds = $instance->getConnection()
+            ->table($instance->getTable())
+            ->whereIn($instance->getKeyName(), $payloadIds)
+            ->pluck($instance->getKeyName())
+            ->all();
+
+        $staleIds = array_values(array_diff($payloadIds, $existingIds));
+
+        if (empty($staleIds)) {
+            return null;
+        }
+
+        return Embeddable::query()
+            ->where('embeddable_type', $type)
+            ->whereIn('embeddable_id', $staleIds);
+    }
+
+    /**
      * @param  array<int, Builder>  $queries
      */
     private function totalForQueries(array $queries): int
@@ -278,15 +386,19 @@ class CleanCommand extends Command
     private function deleteWithProgress(array $queries, int $total): void
     {
         $chunkSize = max(1, (int) $this->option('chunk'));
-        $key = (new Embedding())->getKeyName();
 
-        $this->withProgressBar($total, function ($bar) use ($queries, $chunkSize, $key) {
+        $this->withProgressBar($total, function ($bar) use ($queries, $chunkSize) {
             foreach ($queries as $query) {
-                $query->chunkById($chunkSize, function ($embeddings) use ($bar, $key) {
-                    Embedding::query()
-                        ->whereIn($key, $embeddings->modelKeys())
+                // Queries target either the embeddings or the embeddables
+                // model — derive the key/model from the query itself.
+                $model = $query->getModel();
+                $key = $model->getKeyName();
+
+                $query->chunkById($chunkSize, function ($rows) use ($bar, $model, $key) {
+                    $model->newQuery()
+                        ->whereIn($key, $rows->modelKeys())
                         ->delete();
-                    $bar->advance($embeddings->count());
+                    $bar->advance($rows->count());
                 }, $key);
             }
         });

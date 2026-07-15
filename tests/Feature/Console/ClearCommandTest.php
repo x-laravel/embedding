@@ -2,9 +2,11 @@
 
 namespace XLaravel\Embedding\Tests\Feature\Console;
 
+use XLaravel\Embedding\Models\Embeddable as EmbeddableRecord;
 use XLaravel\Embedding\Models\Embedding;
 use XLaravel\Embedding\Tests\Fixtures\Models\Article;
 use XLaravel\Embedding\Tests\Fixtures\Models\PostMultiSlot;
+use XLaravel\Embedding\Tests\Fixtures\Models\VenueWithPayload;
 use XLaravel\Embedding\Tests\TestCase;
 
 class ClearCommandTest extends TestCase
@@ -125,5 +127,87 @@ class ClearCommandTest extends TestCase
             ->assertSuccessful();
 
         $this->assertDatabaseCount('embeddings', 1);
+    }
+
+    public function test_model_scope_also_deletes_payload_rows(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+        VenueWithPayload::create(['name' => 'B', 'province_id' => 6]);
+
+        $this->assertSame(2, EmbeddableRecord::query()->count());
+
+        $this->artisan('embedding:clear', ['model' => VenueWithPayload::class, '--force' => true])
+            ->expectsOutput('Deleted 2 embedding(s) and 2 payload record(s) for ['.VenueWithPayload::class.'].')
+            ->assertSuccessful();
+
+        $this->assertSame(0, Embedding::where('embeddable_type', VenueWithPayload::class)->count());
+        $this->assertSame(0, EmbeddableRecord::query()->count());
+    }
+
+    public function test_slot_scoped_clear_keeps_payload_rows(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+
+        $this->artisan('embedding:clear', [
+            'model' => VenueWithPayload::class,
+            '--slot' => 'default',
+            '--force' => true,
+        ])
+            ->expectsOutput('Deleted 1 embedding(s) for ['.VenueWithPayload::class.'] slot [default].')
+            ->assertSuccessful();
+
+        $this->assertSame(0, Embedding::where('embeddable_type', VenueWithPayload::class)->count());
+
+        // The payload record is entity-level — a slot-scoped clear is
+        // partial and must not remove it.
+        $this->assertSame(1, EmbeddableRecord::query()->count());
+    }
+
+    public function test_all_truncates_embeddables_table_too(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+        Article::create(['title' => 'A', 'body' => 'a']);
+
+        $this->assertDatabaseCount('embeddings', 2);
+        $this->assertSame(1, EmbeddableRecord::query()->count());
+
+        $this->artisan('embedding:clear', ['--all' => true, '--force' => true])
+            ->expectsOutput('Deleted 2 embedding(s) and 1 payload record(s) from the entire embeddings and embeddables tables.')
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('embeddings', 0);
+        $this->assertSame(0, EmbeddableRecord::query()->count());
+    }
+
+    public function test_dry_run_reports_payload_count_without_deleting(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+
+        $this->artisan('embedding:clear', [
+            'model' => VenueWithPayload::class,
+            '--dry-run' => true,
+        ])
+            ->expectsOutput('Dry-run: would delete 1 embedding(s) and 1 payload record(s) for ['.VenueWithPayload::class.'].')
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('embeddings', 1);
+        $this->assertSame(1, EmbeddableRecord::query()->count());
+    }
+
+    public function test_clears_payload_rows_even_when_no_embeddings_remain(): void
+    {
+        $venue = VenueWithPayload::withoutEmbedding(
+            fn () => VenueWithPayload::create(['name' => 'A', 'province_id' => 34])
+        );
+        $venue->syncEmbeddingPayload();
+
+        $this->assertDatabaseCount('embeddings', 0);
+        $this->assertSame(1, EmbeddableRecord::query()->count());
+
+        $this->artisan('embedding:clear', ['model' => VenueWithPayload::class, '--force' => true])
+            ->expectsOutput('Deleted 0 embedding(s) and 1 payload record(s) for ['.VenueWithPayload::class.'].')
+            ->assertSuccessful();
+
+        $this->assertSame(0, EmbeddableRecord::query()->count());
     }
 }

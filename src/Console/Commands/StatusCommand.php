@@ -12,6 +12,7 @@ use Symfony\Component\Finder\Finder;
 use Throwable;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
 use XLaravel\Embedding\Contracts\VectorStoreMetrics;
+use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 use XLaravel\Embedding\SimilarityManager;
 
@@ -36,6 +37,7 @@ class StatusCommand extends Command
         $aiServices = $this->collectAiServices();
         $coverage = $this->collectCoverage($models);
         $health = $this->collectHealth();
+        $payload = $this->collectPayload($models);
         $storage = $this->collectStorage();
 
         if ($this->option('json')) {
@@ -44,6 +46,7 @@ class StatusCommand extends Command
                 'ai' => $aiServices,
                 'models' => $coverage,
                 'health' => $health,
+                'payload' => $payload,
                 'storage' => $storage,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION));
 
@@ -53,6 +56,7 @@ class StatusCommand extends Command
         $this->renderConfiguration($configuration, $aiServices);
         $this->renderCoverage($coverage);
         $this->renderHealth($health);
+        $this->renderPayload($payload);
         $this->renderStorage($storage);
 
         return self::SUCCESS;
@@ -458,6 +462,56 @@ class StatusCommand extends Command
     }
 
     /**
+     * @param  array<int, string>  $models
+     * @return array{models_with_payload: int, payload_rows: int, embedded_entities_missing_payload: int}
+     */
+    private function collectPayload(array $models): array
+    {
+        $withPayload = array_values(array_filter(
+            $models,
+            fn (string $modelClass) => (new $modelClass())->hasEmbeddingPayload(),
+        ));
+
+        $missing = 0;
+        foreach ($withPayload as $modelClass) {
+            $missing += $this->countEmbeddedEntitiesMissingPayload($modelClass);
+        }
+
+        return [
+            'models_with_payload' => count($withPayload),
+            'payload_rows' => Embeddable::query()->count(),
+            'embedded_entities_missing_payload' => $missing,
+        ];
+    }
+
+    private function countEmbeddedEntitiesMissingPayload(string $modelClass): int
+    {
+        $morphClass = (new $modelClass())->getMorphClass();
+        $embeddingTable = (new Embedding())->getTable();
+        $embeddablesTable = (new Embeddable())->getTable();
+
+        // Both tables always live on the embedding connection, so the
+        // whereNotExists never crosses databases regardless of where the
+        // model itself lives.
+        return Embedding::query()
+            ->where('embeddable_type', $morphClass)
+            ->whereNotExists(function ($q) use ($embeddablesTable, $embeddingTable) {
+                $q->selectRaw('1')
+                    ->from($embeddablesTable)
+                    ->whereColumn(
+                        "{$embeddablesTable}.embeddable_type",
+                        "{$embeddingTable}.embeddable_type",
+                    )
+                    ->whereColumn(
+                        "{$embeddablesTable}.embeddable_id",
+                        "{$embeddingTable}.embeddable_id",
+                    );
+            })
+            ->distinct()
+            ->count('embeddable_id');
+    }
+
+    /**
      * @return array{
      *     embedding: array{provider: string|null, model: string|null},
      *     rerank: array{provider: string|null, model: string|null},
@@ -634,6 +688,23 @@ class StatusCommand extends Command
         $this->line($invalid);
 
         $this->line('  Total stored vectors:               ' . number_format($health['total_vectors']));
+        $this->newLine();
+    }
+
+    /**
+     * @param  array{models_with_payload: int, payload_rows: int, embedded_entities_missing_payload: int}  $payload
+     */
+    private function renderPayload(array $payload): void
+    {
+        $this->line('<comment>Payload:</comment>');
+        $this->line('  Models with payload:                ' . number_format($payload['models_with_payload']));
+        $this->line('  Payload records:                    ' . number_format($payload['payload_rows']));
+
+        $missing = '  Embedded entities missing payload:  ' . number_format($payload['embedded_entities_missing_payload']);
+        if ($payload['embedded_entities_missing_payload'] > 0) {
+            $missing .= ' <fg=gray>→ Run </><info>embedding:generate --payload-only</info><fg=gray> to backfill.</>';
+        }
+        $this->line($missing);
         $this->newLine();
     }
 

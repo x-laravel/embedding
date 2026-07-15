@@ -5,9 +5,12 @@ namespace XLaravel\Embedding\Tests\Feature\Console;
 use Illuminate\Support\Facades\Artisan;
 use RuntimeException;
 use XLaravel\Embedding\Contracts\VectorStoreMetrics;
+use XLaravel\Embedding\Models\Embeddable as EmbeddableRecord;
 use XLaravel\Embedding\Models\Embedding;
 use XLaravel\Embedding\Tests\Fixtures\Models\Article;
 use XLaravel\Embedding\Tests\Fixtures\Models\PostMultiSlot;
+use XLaravel\Embedding\Tests\Fixtures\Models\VenueMultiSlotWithPayload;
+use XLaravel\Embedding\Tests\Fixtures\Models\VenueWithPayload;
 use XLaravel\Embedding\Tests\TestCase;
 
 class StatusCommandTest extends TestCase
@@ -234,9 +237,67 @@ class StatusCommandTest extends TestCase
         $this->assertArrayHasKey('ai', $payload);
         $this->assertArrayHasKey('models', $payload);
         $this->assertArrayHasKey('health', $payload);
+        $this->assertArrayHasKey('payload', $payload);
         $this->assertArrayHasKey('storage', $payload);
 
         $this->assertSame(1, $payload['health']['total_vectors']);
+    }
+
+    public function test_payload_block_reports_full_coverage(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+
+        $payload = $this->statusJson(['model' => VenueWithPayload::class]);
+
+        $this->assertSame(1, $payload['payload']['models_with_payload']);
+        $this->assertSame(1, $payload['payload']['payload_rows']);
+        $this->assertSame(0, $payload['payload']['embedded_entities_missing_payload']);
+    }
+
+    public function test_payload_block_counts_embedded_entities_missing_payload(): void
+    {
+        VenueWithPayload::create(['name' => 'A', 'province_id' => 34]);
+
+        EmbeddableRecord::query()->delete();
+
+        $payload = $this->statusJson(['model' => VenueWithPayload::class]);
+
+        $this->assertSame(1, $payload['payload']['models_with_payload']);
+        $this->assertSame(0, $payload['payload']['payload_rows']);
+        $this->assertSame(1, $payload['payload']['embedded_entities_missing_payload']);
+
+        // The human-readable rendering points at the backfill command.
+        $this->artisan('embedding:status', ['model' => VenueWithPayload::class])
+            ->expectsOutputToContain('embedding:generate --payload-only')
+            ->assertSuccessful();
+    }
+
+    public function test_missing_payload_count_is_per_entity_not_per_slot(): void
+    {
+        // Two slots → two embeddings, but a single entity and a single
+        // (deleted) payload row: the missing count must be 1, not 2.
+        VenueMultiSlotWithPayload::create([
+            'name' => 'A', 'description' => 'desc', 'province_id' => 34,
+        ]);
+
+        $this->assertSame(2, Embedding::query()->count());
+
+        EmbeddableRecord::query()->delete();
+
+        $payload = $this->statusJson(['model' => VenueMultiSlotWithPayload::class]);
+
+        $this->assertSame(1, $payload['payload']['embedded_entities_missing_payload']);
+    }
+
+    public function test_payload_block_is_zero_for_models_without_payload(): void
+    {
+        Article::create(['title' => 'A', 'body' => 'a']);
+
+        $payload = $this->statusJson(['model' => Article::class]);
+
+        $this->assertSame(0, $payload['payload']['models_with_payload']);
+        $this->assertSame(0, $payload['payload']['payload_rows']);
+        $this->assertSame(0, $payload['payload']['embedded_entities_missing_payload']);
     }
 
     public function test_ai_services_section_reports_configured_provider_and_default_model(): void
@@ -303,6 +364,14 @@ class StatusCommandTest extends TestCase
             $table->json('vector');
             $table->timestamps();
             $table->unique(['embeddable_type', 'embeddable_id', 'slot']);
+        });
+
+        \Illuminate\Support\Facades\Schema::connection('secondary')->create('embeddables', function ($table) {
+            $table->id();
+            $table->morphs('embeddable');
+            $table->json('payload');
+            $table->timestamps();
+            $table->unique(['embeddable_type', 'embeddable_id']);
         });
 
         $live = Article::create(['title' => 'Alive', 'body' => 'Yes']);

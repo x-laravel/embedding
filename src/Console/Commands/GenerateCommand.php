@@ -2,6 +2,7 @@
 
 namespace XLaravel\Embedding\Console\Commands;
 
+use Closure;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
@@ -9,6 +10,8 @@ use ReflectionClass;
 use Symfony\Component\Finder\Finder;
 use Throwable;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
+use XLaravel\Embedding\Jobs\SyncModelPayload;
+use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 
 class GenerateCommand extends Command
@@ -20,12 +23,19 @@ class GenerateCommand extends Command
         {--chunk=100 : Number of records per chunk}
         {--sync : Generate embeddings synchronously instead of dispatching queued jobs}
         {--force : Regenerate embeddings for all records, including existing ones}
+        {--payload-only : Backfill payload (embeddables) records without touching vectors or the AI provider}
         {--dry-run : Report counts per model and slot without dispatching anything}';
 
-    protected $description = 'Generate missing embeddings for HasEmbeddings models (auto-discovers when no model is given, use --force to regenerate all)';
+    protected $description = 'Generate missing embeddings for HasEmbeddings models (auto-discovers when no model is given, use --force to regenerate all, --payload-only to backfill payload records)';
 
     public function handle(): int
     {
+        if ($this->option('payload-only') && $this->option('slot') !== null) {
+            $this->error('--payload-only and --slot cannot be combined.');
+
+            return self::FAILURE;
+        }
+
         $models = $this->resolveModels();
 
         if ($models === null) {
@@ -66,9 +76,15 @@ class GenerateCommand extends Command
             }
         }
 
-        $this->info($this->option('dry-run')
-            ? "Dry-run: would generate embeddings for {$count} record(s)."
-            : "Generated embeddings for {$count} record(s).");
+        if ($this->option('payload-only')) {
+            $this->info($this->option('dry-run')
+                ? "Dry-run: would sync payload for {$count} record(s)."
+                : "Synced payload for {$count} record(s).");
+        } else {
+            $this->info($this->option('dry-run')
+                ? "Dry-run: would generate embeddings for {$count} record(s)."
+                : "Generated embeddings for {$count} record(s).");
+        }
 
         if (! empty($failures)) {
             $this->newLine();
@@ -166,6 +182,10 @@ class GenerateCommand extends Command
 
     private function processModel(string $modelClass): int
     {
+        if ($this->option('payload-only')) {
+            return $this->processPayload($modelClass);
+        }
+
         $slots = $this->resolveSlots($modelClass);
 
         if (empty($slots)) {
@@ -234,11 +254,60 @@ class GenerateCommand extends Command
 
         $this->line("Slot: <info>{$slot}</info>");
 
+        return $this->processWithProgress(
+            $query,
+            $filter,
+            $limit,
+            $total,
+            fn (HasEmbeddings $model) => $this->performTask($model, $slot),
+        );
+    }
+
+    private function processPayload(string $modelClass): int
+    {
+        if (! (new $modelClass())->hasEmbeddingPayload()) {
+            $this->warn("No embedding payload defined on [{$modelClass}].");
+
+            return 0;
+        }
+
+        [$query, $filter] = $this->buildPayloadPlan($modelClass);
+        $limit = $this->option('limit') !== null ? (int) $this->option('limit') : null;
+
+        $total = (clone $query)->count();
+        if ($limit !== null) {
+            $total = min($total, $limit);
+        }
+
+        if ($total === 0) {
+            return 0;
+        }
+
+        if ($this->option('dry-run')) {
+            $suffix = $filter !== null ? ' <comment>(approximate, cross-connection)</comment>' : '';
+            $this->line("Payload — would process <comment>{$total}</comment> record(s){$suffix}");
+
+            return $total;
+        }
+
+        $this->line('Payload:');
+
+        return $this->processWithProgress(
+            $query,
+            $filter,
+            $limit,
+            $total,
+            fn (HasEmbeddings $model) => $this->performPayloadTask($model),
+        );
+    }
+
+    private function processWithProgress(Builder $query, ?Closure $filter, ?int $limit, int $total, Closure $task): int
+    {
         $processed = 0;
         $chunk = (int) $this->option('chunk');
 
-        $this->withProgressBar($total, function ($bar) use ($query, $filter, $chunk, $slot, $limit, &$processed) {
-            $query->chunk($chunk, function ($models) use ($filter, $slot, $limit, &$processed, $bar) {
+        $this->withProgressBar($total, function ($bar) use ($query, $filter, $chunk, $limit, $task, &$processed) {
+            $query->chunk($chunk, function ($models) use ($filter, $limit, $task, &$processed, $bar) {
                 if ($filter !== null) {
                     $models = $filter($models);
                 }
@@ -248,7 +317,7 @@ class GenerateCommand extends Command
                         return false;
                     }
 
-                    $this->performTask($model, $slot);
+                    $task($model);
                     $processed++;
                     $bar->advance();
                 }
@@ -303,10 +372,73 @@ class GenerateCommand extends Command
         return [$modelClass::query(), $filter];
     }
 
+    /**
+     * @return array{0: Builder, 1: \Closure|null}
+     */
+    private function buildPayloadPlan(string $modelClass): array
+    {
+        if ($this->option('force')) {
+            return [$modelClass::query(), null];
+        }
+
+        $instance = new $modelClass();
+        $morphClass = $instance->getMorphClass();
+        $modelConnection = $instance->getConnection()->getName();
+        $payloadConnection = (new Embeddable())->getConnection()->getName();
+
+        if ($modelConnection === $payloadConnection) {
+            $modelTable = $instance->getTable();
+            $modelKey = $instance->getKeyName();
+            $embeddablesTable = (new Embeddable())->getTable();
+
+            return [
+                $modelClass::query()->whereNotExists(function ($q) use ($embeddablesTable, $morphClass, $modelTable, $modelKey) {
+                    $q->selectRaw('1')
+                        ->from($embeddablesTable)
+                        ->where("{$embeddablesTable}.embeddable_type", $morphClass)
+                        ->whereColumn(
+                            "{$embeddablesTable}.embeddable_id",
+                            "{$modelTable}.{$modelKey}",
+                        );
+                }),
+                null,
+            ];
+        }
+
+        $filter = function ($models) use ($morphClass) {
+            if ($models->isEmpty()) {
+                return $models;
+            }
+
+            $existingIds = Embeddable::query()
+                ->where('embeddable_type', $morphClass)
+                ->whereIn('embeddable_id', $models->modelKeys())
+                ->pluck('embeddable_id')
+                ->all();
+
+            if (empty($existingIds)) {
+                return $models;
+            }
+
+            $existing = array_flip(array_map('strval', $existingIds));
+
+            return $models->reject(fn ($model) => isset($existing[(string) $model->getKey()]));
+        };
+
+        return [$modelClass::query(), $filter];
+    }
+
     private function performTask(HasEmbeddings $model, string $slot): void
     {
         $this->option('sync')
             ? $model->embedSync($slot)
             : $model->embed($slot);
+    }
+
+    private function performPayloadTask(HasEmbeddings $model): void
+    {
+        $this->option('sync')
+            ? $model->syncEmbeddingPayload()
+            : dispatch(new SyncModelPayload($model));
     }
 }

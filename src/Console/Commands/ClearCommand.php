@@ -3,19 +3,20 @@
 namespace XLaravel\Embedding\Console\Commands;
 
 use Illuminate\Console\Command;
+use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
 
 class ClearCommand extends Command
 {
     protected $signature = 'embedding:clear
         {model? : Fully qualified model class to clear (omit when using --all)}
-        {--slot= : Only clear records for this specific slot}
+        {--slot= : Only clear records for this specific slot (payload records are kept)}
         {--all : Clear embeddings for every model (truncate path when no other filter is set)}
         {--chunk=100 : Number of records per delete batch when not truncating}
         {--force : Skip confirmation prompt}
         {--dry-run : Report counts without deleting}';
 
-    protected $description = 'Delete stored embeddings for a specific model, or all of them with --all.';
+    protected $description = 'Delete stored embeddings (and payload records) for a specific model, or all of them with --all.';
 
     public function handle(): int
     {
@@ -51,23 +52,37 @@ class ClearCommand extends Command
             $query->where('slot', $slot);
         }
 
-        $count = (clone $query)->count();
-        $description = $this->describeTarget($modelClass, $slot, $all);
+        // Payload records are entity-level, not slot-level — a slot-scoped
+        // clear is partial and must leave the shared payload row intact.
+        $payloadQuery = null;
 
-        if ($count === 0) {
+        if ($slot === null) {
+            $payloadQuery = Embeddable::query();
+
+            if ($modelClass !== null) {
+                $payloadQuery->where('embeddable_type', $modelClass);
+            }
+        }
+
+        $count = (clone $query)->count();
+        $payloadCount = $payloadQuery !== null ? (clone $payloadQuery)->count() : 0;
+        $description = $this->describeTarget($modelClass, $slot, $all, $payloadCount);
+        $subject = $this->describeSubject($count, $payloadCount);
+
+        if ($count === 0 && $payloadCount === 0) {
             $this->info("No embeddings to delete {$description}.");
 
             return self::SUCCESS;
         }
 
         if ($this->option('dry-run')) {
-            $this->info("Dry-run: would delete {$count} embedding(s) {$description}.");
+            $this->info("Dry-run: would delete {$subject} {$description}.");
 
             return self::SUCCESS;
         }
 
         if (! $this->option('force')
-            && ! $this->confirm("Delete {$count} embedding(s) {$description}?", false)) {
+            && ! $this->confirm("Delete {$subject} {$description}?", false)) {
             $this->line('Aborted.');
 
             return self::SUCCESS;
@@ -76,13 +91,31 @@ class ClearCommand extends Command
         if ($all && $slot === null) {
             $embedding = new Embedding();
             $embedding->getConnection()->table($embedding->getTable())->truncate();
+
+            $embeddable = new Embeddable();
+            $embeddable->getConnection()->table($embeddable->getTable())->truncate();
         } else {
-            $this->deleteWithProgress($query, $count);
+            if ($count > 0) {
+                $this->deleteWithProgress($query, $count);
+            }
+
+            $payloadQuery?->delete();
         }
 
-        $this->info("Deleted {$count} embedding(s) {$description}.");
+        $this->info("Deleted {$subject} {$description}.");
 
         return self::SUCCESS;
+    }
+
+    private function describeSubject(int $count, int $payloadCount): string
+    {
+        $subject = "{$count} embedding(s)";
+
+        if ($payloadCount > 0) {
+            $subject .= " and {$payloadCount} payload record(s)";
+        }
+
+        return $subject;
     }
 
     private function deleteWithProgress(\Illuminate\Database\Eloquent\Builder $query, int $total): void
@@ -100,10 +133,12 @@ class ClearCommand extends Command
         $this->newLine();
     }
 
-    private function describeTarget(?string $modelClass, ?string $slot, bool $all): string
+    private function describeTarget(?string $modelClass, ?string $slot, bool $all, int $payloadCount): string
     {
         if ($all && $slot === null) {
-            return 'from the entire embeddings table';
+            return $payloadCount > 0
+                ? 'from the entire embeddings and embeddables tables'
+                : 'from the entire embeddings table';
         }
 
         if ($all && $slot !== null) {
