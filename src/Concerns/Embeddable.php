@@ -406,10 +406,13 @@ trait Embeddable
      *
      * @param  array<int, float>  $queryVector
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
-     * @param  \Closure|null  $where  Additional Eloquent constraints applied before the search
+     * @param  \Closure|null  $where  Additional Eloquent constraints applied before the search —
+     *                                best for one-off / complex / small-set restrictions
+     * @param  array<string, mixed>|null  $filter  Payload equality/IN constraints, ANDed together —
+     *                                             best for high-cardinality, indexable restrictions
      * @return \Illuminate\Database\Eloquent\Collection<int, static>
      */
-    public static function similarTo(array $queryVector, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default'): Collection
+    public static function similarTo(array $queryVector, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default', ?array $filter = null): Collection
     {
         $ids = null;
 
@@ -424,6 +427,7 @@ trait Embeddable
             threshold: $threshold,
             ids: $ids,
             slot: $slot,
+            filter: $filter,
         ));
     }
 
@@ -455,9 +459,10 @@ trait Embeddable
      * Find the most similar models to this model, excluding itself.
      *
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
+     * @param  array<string, mixed>|null  $filter  Payload equality/IN constraints, ANDed together
      * @return \Illuminate\Database\Eloquent\Collection<int, static>
      */
-    public function mostSimilar(int $limit = 10, float $threshold = 0.0, string $slot = 'default'): Collection
+    public function mostSimilar(int $limit = 10, float $threshold = 0.0, string $slot = 'default', ?array $filter = null): Collection
     {
         $vector = $this->embedding($slot)->first()?->vector;
 
@@ -467,7 +472,7 @@ trait Embeddable
 
         $selfKey = $this->getKey();
 
-        return static::similarTo($vector, $limit + 1, $threshold, slot: $slot)
+        return static::similarTo($vector, $limit + 1, $threshold, slot: $slot, filter: $filter)
             ->filter(fn ($m) => $m->getKey() !== $selfKey)
             ->take($limit)
             ->values();
@@ -477,10 +482,13 @@ trait Embeddable
      * Find models most similar to the given text query.
      *
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
-     * @param  \Closure|null  $where  Additional Eloquent constraints applied before the search
+     * @param  \Closure|null  $where  Additional Eloquent constraints applied before the search —
+     *                                best for one-off / complex / small-set restrictions
+     * @param  array<string, mixed>|null  $filter  Payload equality/IN constraints, ANDed together —
+     *                                             best for high-cardinality, indexable restrictions
      * @return \Illuminate\Database\Eloquent\Collection<int, static>
      */
-    public static function similarToText(string $text, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default'): Collection
+    public static function similarToText(string $text, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default', ?array $filter = null): Collection
     {
         // The AI provider can legitimately return zero embeddings (empty
         // input, throttled response, transient backend error). Calling
@@ -493,7 +501,7 @@ trait Embeddable
             return new Collection();
         }
 
-        return static::similarTo($response->first(), $limit, $threshold, $where, $slot);
+        return static::similarTo($response->first(), $limit, $threshold, $where, $slot, $filter);
     }
 
     /**
