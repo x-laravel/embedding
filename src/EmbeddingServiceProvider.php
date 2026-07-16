@@ -10,6 +10,7 @@ use XLaravel\Embedding\Console\Commands\Payload\CleanCommand as PayloadCleanComm
 use XLaravel\Embedding\Console\Commands\Payload\ClearCommand as PayloadClearCommand;
 use XLaravel\Embedding\Console\Commands\Payload\StatusCommand as PayloadStatusCommand;
 use XLaravel\Embedding\Console\Commands\Payload\SyncCommand as PayloadSyncCommand;
+use XLaravel\Embedding\Console\Commands\StorageCommand;
 use XLaravel\Embedding\Console\Commands\Vector\CleanCommand as VectorCleanCommand;
 use XLaravel\Embedding\Console\Commands\Vector\ClearCommand as VectorClearCommand;
 use XLaravel\Embedding\Console\Commands\Vector\GenerateCommand as VectorGenerateCommand;
@@ -70,6 +71,7 @@ class EmbeddingServiceProvider extends ServiceProvider
                 PayloadStatusCommand::class,
                 ClearCommand::class,
                 CleanCommand::class,
+                StorageCommand::class,
             ]);
         }
     }

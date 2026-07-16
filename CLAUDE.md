@@ -362,6 +362,13 @@ Both status commands are read-only. `embedding:vector:status` prints four sectio
 
 `embedding:payload:status` prints **Configuration** (embeddables table, sync-payload queue), **Model Coverage** (per-model Records / With Payload / Coverage — payload-less models get a "no payload defined" note), **Health** (payload row count, stale rows with an `embedding:payload:clean` hint, embedded entities missing a payload row — counted per entity via distinct `embeddable_id`, not per slot; both tables live on the embedding connection so the `whereNotExists` never crosses connections — with an `embedding:payload:sync` backfill hint) and **Storage** (driver-specific bytes via the `PayloadStoreMetrics` contract). It has no `--slot` option.
 
+```bash
+php artisan embedding:storage                                       # storage snapshot of both tables
+php artisan embedding:storage --json                                # {"vector": {...}, "payload": {...}}
+```
+
+`embedding:storage` is the cheap read-only alternative to the status commands when only disk figures are needed: exactly two metrics reads (`VectorStoreMetrics` + `PayloadStoreMetrics`), no coverage or health scans, no model argument, no `--slot`. Prints per-table Rows / Data / Index / Total plus a combined byte total — the combined figure is `n/a` unless **both** drivers supply bytes (a partial sum would silently understate it). The defensive snapshot logic (unbound contract or throwing implementation → all-null, `-v` surfaces the exception) is shared with the status commands via the `ReadsStorageMetrics` trait.
+
 `VectorStoreMetrics` (`src/Contracts/VectorStoreMetrics.php`) is the read-side counterpart of `VectorStore`; `PayloadStoreMetrics` (`src/Contracts/PayloadStoreMetrics.php`) is the same for `PayloadStore`. Both `snapshot()` methods return `['rows' => int, 'bytes' => int|null, 'data_bytes' => int|null, 'index_bytes' => int|null]` — `rows` is always an int, byte fields are `int|null` (null = driver cannot supply). The core package binds `JsonVectorStoreMetrics` / `DatabasePayloadStoreMetrics` by default — they return `Embedding::count()` / `Embeddable::count()` for `rows` and `null` for every byte field. DB driver packages override the bindings in their `register()` (`MysqlVectorStoreMetrics`, `PgsqlVectorStoreMetrics`, …) to add native byte figures. When `snapshot()` throws, the status commands silently fall back to `n/a` and exit 0; passing `-v` surfaces the underlying exception message. Programmatic callers can call `app(VectorStoreMetrics::class)->snapshot()` / `app(PayloadStoreMetrics::class)->snapshot()` directly — the default bindings guarantee a result.
 
 ## Horizon Tags

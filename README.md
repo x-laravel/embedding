@@ -451,6 +451,17 @@ php artisan embedding:payload:status "App\Models\Venue"              # restrict 
 php artisan embedding:payload:status --json                          # machine-readable output
 ```
 
+### `embedding:storage`
+
+A cheap, read-only storage snapshot of both tables — exactly two metrics reads, none of the coverage / health scans the status commands run. Ideal for cron-driven monitoring on large tables.
+
+```bash
+php artisan embedding:storage                                        # per-table Rows / Data / Index / Total + combined total
+php artisan embedding:storage --json                                 # {"vector": {...}, "payload": {...}}
+```
+
+The combined total is only printed when both drivers supply byte figures — a partial sum would silently understate it.
+
 Sample `embedding:vector:status` output:
 
 ```

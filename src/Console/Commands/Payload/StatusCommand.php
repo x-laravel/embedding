@@ -3,9 +3,8 @@
 namespace XLaravel\Embedding\Console\Commands\Payload;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Number;
-use Throwable;
 use XLaravel\Embedding\Console\Commands\Concerns\BuildsPayloadHealthQueries;
+use XLaravel\Embedding\Console\Commands\Concerns\ReadsStorageMetrics;
 use XLaravel\Embedding\Console\Commands\Concerns\ResolvesEmbeddableModels;
 use XLaravel\Embedding\Console\Commands\Concerns\SumsQueryCounts;
 use XLaravel\Embedding\Contracts\PayloadStoreMetrics;
@@ -15,6 +14,7 @@ use XLaravel\Embedding\Models\Embedding;
 class StatusCommand extends Command
 {
     use BuildsPayloadHealthQueries;
+    use ReadsStorageMetrics;
     use ResolvesEmbeddableModels;
     use SumsQueryCounts;
 
@@ -214,28 +214,7 @@ class StatusCommand extends Command
      */
     private function collectStorage(): array
     {
-        $default = ['rows' => null, 'bytes' => null, 'data_bytes' => null, 'index_bytes' => null];
-
-        if (! $this->laravel->bound(PayloadStoreMetrics::class)) {
-            return $default;
-        }
-
-        try {
-            $snapshot = $this->laravel->make(PayloadStoreMetrics::class)->snapshot();
-        } catch (Throwable $e) {
-            if ($this->getOutput()->isVerbose()) {
-                $this->line("  <comment>storage metrics unavailable:</comment> {$e->getMessage()}");
-            }
-
-            return $default;
-        }
-
-        return [
-            'rows' => $snapshot['rows'] ?? null,
-            'bytes' => $snapshot['bytes'] ?? null,
-            'data_bytes' => $snapshot['data_bytes'] ?? null,
-            'index_bytes' => $snapshot['index_bytes'] ?? null,
-        ];
+        return $this->storageSnapshot(PayloadStoreMetrics::class);
     }
 
     /**
@@ -327,19 +306,7 @@ class StatusCommand extends Command
     private function renderStorage(array $storage): void
     {
         $this->line('<comment>Storage:</comment>');
-        $this->line('  Rows:       ' . ($storage['rows'] === null ? 'n/a' : number_format($storage['rows'])));
-        $this->line('  Data:       ' . $this->formatBytes($storage['data_bytes']));
-        $this->line('  Index:      ' . $this->formatBytes($storage['index_bytes']));
-        $this->line('  Total size: ' . $this->formatBytes($storage['bytes']));
+        $this->renderStorageLines($storage);
         $this->newLine();
-    }
-
-    private function formatBytes(?int $bytes): string
-    {
-        if ($bytes === null) {
-            return 'n/a';
-        }
-
-        return Number::fileSize($bytes);
     }
 }
