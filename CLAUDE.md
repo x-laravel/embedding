@@ -61,6 +61,7 @@ The vector path is completely unaware of the payload — `GenerateModelEmbedding
 - `bootEmbeddable()` defers observer registration via `whenBooted` to avoid circular boot
 - `embeddingSlotMap()` builds the slot→fields map from `$embeddable` + `#[EmbedOn]` attributes
 - `slotsToEmbed(array $changedKeys)` returns which slots need re-embedding for the given field changes. Uses `wasRecentlyCreated && empty($changedKeys)` to seed all slots on insert (Eloquent does not call `syncChanges()` after insert, so `getChanges()` is empty for new records)
+- `embeddedCount(string $slot)` / `missingEmbeddingCount(?string $slot)` are static coverage counters — cross-connection setups fall back to a pluck + `whereIn` strategy (the embedding-side lookup matches on `getMorphClass()`); `vector:status` coverage delegates here
 - `fireEmbeddingModelEvent(string $event, string $slot)` dispatches directly to the event dispatcher with `[$model, $slot]` payload so listeners can optionally receive the slot
 
 **`EmbeddingObserver`** (`src/Observers/EmbeddingObserver.php`) handles `saved`, `deleted`, `restored`, `forceDeleted`. The `saved` handler skips soft-delete restores, dispatches vector jobs per slot and (independently) a `SyncModelPayload` job when payload fields changed. `deleted`/`forceDeleted` call `$model->embeddings()->delete()` (MorphMany — all slots) and `PayloadStore::delete($model)`; in soft-delete keep mode both survive. `restored` re-embeds all slots from `embeddingSlotMap()` and re-syncs the payload (only in the `!keep` branch — in keep mode the payload row was never deleted). `$syncingDisabledFor` is class-scoped static; `disableEmbedding()` / `withoutEmbedding()` suppress payload dispatch too.
@@ -279,6 +280,11 @@ app(\XLaravel\Embedding\Reranker::class)->rerank($candidates, query: 'q', take: 
 // Slot introspection
 $model->embeddingSlotMap(): array    // ['title' => ['title'], 'full' => ['title','body']]
 $model->slotsToEmbed(['title']): array  // ['title', 'full']
+
+// Coverage counters (static — cross-connection aware)
+Post::embeddedCount('title'): int         // records with a stored embedding for the slot
+Post::missingEmbeddingCount('title'): int // records lacking the slot's embedding
+Post::missingEmbeddingCount(): int        // missing summed across all declared slots (0 when none defined)
 ```
 
 `threshold` defaults to `0.0` (no filtering). All similarity methods set `similarity_score` on returned models. Driver (`php`, `pgsql`, `mysql`, `oracle`, …) is resolved automatically if the matching driver package is installed.
@@ -358,7 +364,7 @@ php artisan embedding:payload:status                                # payload re
 php artisan embedding:payload:status "App\Models\Venue" --json      # restrict to one model, machine-readable
 ```
 
-Both status commands are read-only. `embedding:vector:status` prints four sections: **Configuration** (a single Setting / Value / Detail / Note table covering similarity driver, vector dimensions, DB / queue connections, plus the resolved AI Embedding/Rerank Provider + Model — pulled from `laravel/ai` via `Ai::fakeableEmbeddingProvider($name)->defaultEmbeddingsModel()` and the rerank counterpart; `n/a` when unconfigured or when the provider class throws), **Model Coverage** (per-slot Records / Embedded / Coverage table — coverage uses the same `whereDoesntHave('embeddings', …)` logic as `vector:generate`'s "missing" pass), **Health** (orphan and invalid-slot counts from the shared health-query traits, plus `Embedding::count()`, with an `embedding:vector:clean` hint) and **Storage** (driver-specific bytes via the `VectorStoreMetrics` contract). Its JSON output keeps `configuration` and `ai` as separate top-level blocks and no longer contains a `payload` block.
+Both status commands are read-only. `embedding:vector:status` prints four sections: **Configuration** (a single Setting / Value / Detail / Note table covering similarity driver, vector dimensions, DB / queue connections, plus the resolved AI Embedding/Rerank Provider + Model — pulled from `laravel/ai` via `Ai::fakeableEmbeddingProvider($name)->defaultEmbeddingsModel()` and the rerank counterpart; `n/a` when unconfigured or when the provider class throws), **Model Coverage** (per-slot Records / Embedded / Coverage table — counted via the trait's static `embeddedCount()`, which uses `whereHas('embeddings', …)` on a shared connection and a pluck + `whereIn` fallback across connections), **Health** (orphan and invalid-slot counts from the shared health-query traits, plus `Embedding::count()`, with an `embedding:vector:clean` hint) and **Storage** (driver-specific bytes via the `VectorStoreMetrics` contract). Its JSON output keeps `configuration` and `ai` as separate top-level blocks and no longer contains a `payload` block.
 
 `embedding:payload:status` prints **Configuration** (embeddables table, sync-payload queue), **Model Coverage** (per-model Records / With Payload / Coverage — payload-less models get a "no payload defined" note), **Health** (payload row count, stale rows with an `embedding:payload:clean` hint, embedded entities missing a payload row — counted per entity via distinct `embeddable_id`, not per slot; both tables live on the embedding connection so the `whereNotExists` never crosses connections — with an `embedding:payload:sync` backfill hint) and **Storage** (driver-specific bytes via the `PayloadStoreMetrics` contract). It has no `--slot` option.
 

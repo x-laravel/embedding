@@ -4,6 +4,7 @@ namespace XLaravel\Embedding\Concerns;
 
 use Closure;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
 use InvalidArgumentException;
@@ -48,7 +49,7 @@ trait Embeddable
         static::embeddingPayloadAttribute();
 
         $whenBootedCallback = function () {
-            static::observe(new EmbeddingObserver());
+            static::observe(new EmbeddingObserver);
         };
 
         if (method_exists(static::class, 'whenBooted')) {
@@ -137,6 +138,69 @@ trait Embeddable
     public function embeddings(): MorphMany
     {
         return $this->morphMany(config('embedding.model'), 'embeddable');
+    }
+
+    /**
+     * Count records of this model that have a stored embedding for the given
+     * slot. When the model and the embeddings table live on different
+     * connections, whereHas cannot join across them — the embedding-side ID
+     * list is plucked first and verified against the model side instead.
+     */
+    public static function embeddedCount(string $slot = 'default'): int
+    {
+        $instance = new static;
+        $embeddingModel = config('embedding.model');
+
+        $modelConnection = $instance->getConnection()->getName();
+        $embeddingConnection = (new $embeddingModel)->getConnection()->getName();
+
+        if ($modelConnection === $embeddingConnection) {
+            return static::whereHas(
+                'embeddings',
+                fn ($query) => $query->where('slot', $slot)
+            )->count();
+        }
+
+        $embeddingIds = $embeddingModel::query()
+            ->where('embeddable_type', $instance->getMorphClass())
+            ->where('slot', $slot)
+            ->pluck('embeddable_id')
+            ->all();
+
+        if (empty($embeddingIds)) {
+            return 0;
+        }
+
+        return static::query()
+            ->whereIn($instance->getKeyName(), $embeddingIds)
+            ->count();
+    }
+
+    /**
+     * Count records missing a stored embedding. With a slot, counts records
+     * lacking that slot's embedding; without, sums the missing counts across
+     * every declared slot — a record missing two slots counts twice. Models
+     * with no slots defined always report zero.
+     */
+    public static function missingEmbeddingCount(?string $slot = null): int
+    {
+        $slots = $slot !== null
+            ? [$slot]
+            : array_keys((new static)->embeddingSlotMap());
+
+        if (empty($slots)) {
+            return 0;
+        }
+
+        $total = static::query()->count();
+
+        $missing = 0;
+
+        foreach ($slots as $slotName) {
+            $missing += $total - static::embeddedCount($slotName);
+        }
+
+        return $missing;
     }
 
     /**
@@ -306,7 +370,7 @@ trait Embeddable
      *
      * @return array<string, mixed>
      *
-     * @throws \InvalidArgumentException When an explicitly declared value is neither scalar, null, nor an array of scalars
+     * @throws InvalidArgumentException When an explicitly declared value is neither scalar, null, nor an array of scalars
      */
     public function resolveEmbeddingPayload(): array
     {
@@ -425,8 +489,6 @@ trait Embeddable
 
     /**
      * Execute a callback without triggering embedding generation.
-     *
-     * @return mixed
      */
     public static function withoutEmbedding(Closure $callback): mixed
     {
@@ -444,22 +506,22 @@ trait Embeddable
      *
      * @param  array<int, float>  $queryVector
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
-     * @param  \Closure|null  $where  Additional Eloquent constraints applied before the search —
-     *                                best for one-off / complex / small-set restrictions
+     * @param  Closure|null  $where  Additional Eloquent constraints applied before the search —
+     *                               best for one-off / complex / small-set restrictions
      * @param  array<string, mixed>|null  $filter  Payload equality/IN constraints, ANDed together —
      *                                             best for high-cardinality, indexable restrictions
-     * @return \Illuminate\Database\Eloquent\Collection<int, static>
+     * @return Collection<int, static>
      */
     public static function similarTo(array $queryVector, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default', ?array $filter = null): Collection
     {
         $ids = null;
 
         if ($where !== null) {
-            $prototype = new static();
+            $prototype = new static;
             $ids = static::query()->tap($where)->pluck($prototype->getKeyName())->all();
         }
 
-        return app(SimilarityManager::class)->search(new static(), new SearchRequest(
+        return app(SimilarityManager::class)->search(new static, new SearchRequest(
             vector: $queryVector,
             limit: $limit,
             threshold: $threshold,
@@ -472,7 +534,7 @@ trait Embeddable
     /**
      * Compute the cosine similarity score between this model and another model or vector.
      *
-     * @param  \XLaravel\Embedding\Contracts\HasEmbeddings|array<int, float>  $other
+     * @param  HasEmbeddings|array<int, float>  $other
      */
     public function similarityTo(HasEmbeddings|array $other, string $slot = 'default'): float
     {
@@ -498,14 +560,14 @@ trait Embeddable
      *
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
      * @param  array<string, mixed>|null  $filter  Payload equality/IN constraints, ANDed together
-     * @return \Illuminate\Database\Eloquent\Collection<int, static>
+     * @return Collection<int, static>
      */
     public function mostSimilar(int $limit = 10, float $threshold = 0.0, string $slot = 'default', ?array $filter = null): Collection
     {
         $vector = $this->embedding($slot)->first()?->vector;
 
         if ($vector === null) {
-            return new Collection();
+            return new Collection;
         }
 
         $selfKey = $this->getKey();
@@ -520,11 +582,11 @@ trait Embeddable
      * Find models most similar to the given text query.
      *
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
-     * @param  \Closure|null  $where  Additional Eloquent constraints applied before the search —
-     *                                best for one-off / complex / small-set restrictions
+     * @param  Closure|null  $where  Additional Eloquent constraints applied before the search —
+     *                               best for one-off / complex / small-set restrictions
      * @param  array<string, mixed>|null  $filter  Payload equality/IN constraints, ANDed together —
      *                                             best for high-cardinality, indexable restrictions
-     * @return \Illuminate\Database\Eloquent\Collection<int, static>
+     * @return Collection<int, static>
      */
     public static function similarToText(string $text, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default', ?array $filter = null): Collection
     {
@@ -536,7 +598,7 @@ trait Embeddable
         $response = Embeddings::for([$text])->generate();
 
         if (empty($response->embeddings)) {
-            return new Collection();
+            return new Collection;
         }
 
         return static::similarTo($response->first(), $limit, $threshold, $where, $slot, $filter);
@@ -545,10 +607,10 @@ trait Embeddable
     /**
      * Rank an existing collection of models by their similarity to the given text or vector.
      *
-     * @param  iterable<\Illuminate\Database\Eloquent\Model>  $models
+     * @param  iterable<Model>  $models
      * @param  string|array<int, float>  $query  Text or pre-computed query vector
      * @param  float  $threshold  Minimum similarity score; 0.0 returns all results
-     * @return \Illuminate\Database\Eloquent\Collection<int, static>
+     * @return Collection<int, static>
      */
     public static function rankByRelevance(iterable $models, string|array $query, float $threshold = 0.0, string $slot = 'default'): Collection
     {
@@ -560,7 +622,7 @@ trait Embeddable
             // Empty AI response → empty ranked collection rather than an
             // undefined-key error from EmbeddingsResponse::first().
             if (empty($response->embeddings)) {
-                return new Collection();
+                return new Collection;
             }
 
             $queryVector = $response->first();

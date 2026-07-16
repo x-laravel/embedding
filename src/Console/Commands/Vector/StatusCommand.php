@@ -113,7 +113,7 @@ class StatusCommand extends Command
         $slotFilter = $this->option('slot');
 
         foreach ($models as $modelClass) {
-            $instance = new $modelClass();
+            $instance = new $modelClass;
             $slotMap = $instance->embeddingSlotMap();
 
             if (empty($slotMap)) {
@@ -146,7 +146,7 @@ class StatusCommand extends Command
                 }
 
                 $total = $modelClass::query()->count();
-                $embedded = $this->countEmbeddedForSlot($modelClass, $slot);
+                $embedded = $modelClass::embeddedCount($slot);
                 $coverage = $total > 0 ? round($embedded / $total * 100, 1) : null;
 
                 $rows[] = [
@@ -161,39 +161,6 @@ class StatusCommand extends Command
         }
 
         return $rows;
-    }
-
-    private function countEmbeddedForSlot(string $modelClass, string $slot): int
-    {
-        $modelConnection = (new $modelClass())->getConnection()->getName();
-        $embeddingConnection = (new Embedding())->getConnection()->getName();
-
-        if ($modelConnection === $embeddingConnection) {
-            return $modelClass::whereHas(
-                'embeddings',
-                fn ($q) => $q->where('slot', $slot)
-            )->count();
-        }
-
-        // Cross-connection — pluck the (usually small) embedding-side ID
-        // list for this slot first, then verify them against the model
-        // side. Avoids piping the full model table through an IN clause
-        // when most rows have no embedding.
-        $embeddingIds = Embedding::query()
-            ->where('embeddable_type', $modelClass)
-            ->where('slot', $slot)
-            ->pluck('embeddable_id')
-            ->all();
-
-        if (empty($embeddingIds)) {
-            return 0;
-        }
-
-        $instance = new $modelClass();
-
-        return $modelClass::query()
-            ->whereIn($instance->getKeyName(), $embeddingIds)
-            ->count();
     }
 
     /**
@@ -335,7 +302,7 @@ class StatusCommand extends Command
                 $row['slot'],
                 number_format($row['records']),
                 number_format($row['embedded']),
-                $row['coverage'] === null ? 'n/a' : number_format($row['coverage'], 1) . '%',
+                $row['coverage'] === null ? 'n/a' : number_format($row['coverage'], 1).'%',
             ];
         }
 
@@ -351,19 +318,19 @@ class StatusCommand extends Command
         $this->line('<comment>Health:</comment>');
         $hint = ' <fg=gray>→ Run </><info>embedding:vector:clean</info><fg=gray> to fix.</>';
 
-        $orphan = '  Orphan records (missing models):    ' . number_format($health['orphan_records']);
+        $orphan = '  Orphan records (missing models):    '.number_format($health['orphan_records']);
         if ($health['orphan_records'] > 0) {
             $orphan .= $hint;
         }
         $this->line($orphan);
 
-        $invalid = '  Invalid slots (stale definitions):  ' . number_format($health['invalid_slot_records']);
+        $invalid = '  Invalid slots (stale definitions):  '.number_format($health['invalid_slot_records']);
         if ($health['invalid_slot_records'] > 0) {
             $invalid .= $hint;
         }
         $this->line($invalid);
 
-        $this->line('  Total stored vectors:               ' . number_format($health['total_vectors']));
+        $this->line('  Total stored vectors:               '.number_format($health['total_vectors']));
         $this->newLine();
     }
 

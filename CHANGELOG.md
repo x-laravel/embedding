@@ -4,6 +4,16 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.0 - 2026-07-16
+
+### Added
+
+- Static coverage counters on the `Embeddable` trait: `Post::embeddedCount(string $slot = 'default'): int` (records with a stored embedding for the slot) and `Post::missingEmbeddingCount(?string $slot = null): int` (records lacking the slot's embedding; without a slot, sums the missing counts across every declared slot — models with no slots defined report zero). Both handle cross-connection setups (model and embeddings table on different connections) by plucking the embedding-side ID list and verifying it against the model side instead of `whereHas`.
+
+### Changed
+
+- `embedding:vector:status` computes its Model Coverage column via the new `embeddedCount()` trait method instead of a private command helper. Behaviour is identical except under a morph map: the embedding-side lookup now matches on `getMorphClass()` rather than the FQCN, so aliased models are counted correctly.
+
 ## 2.0.0 - 2026-07-16
 
 v2 introduces **payload filtering**: models can publish a set of scalar attributes ("payload") into a second `embeddables` table, and similarity searches can filter on them at the database level via the new `filter` parameter — no post-query PHP filtering, no JOIN against the application tables.
