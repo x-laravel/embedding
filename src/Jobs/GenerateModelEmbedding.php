@@ -11,6 +11,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use XLaravel\Embedding\EmbeddingGenerator;
+use XLaravel\Embedding\Exceptions\EmptyEmbeddingTextException;
 
 class GenerateModelEmbedding implements ShouldBeUnique, ShouldQueue
 {
@@ -61,10 +62,16 @@ class GenerateModelEmbedding implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Execute the job.
+     * Execute the job. A blank resolved text (EmptyEmbeddingTextException)
+     * is not a failure to retry — there is nothing generation could ever do
+     * for it — so it is swallowed and the job completes normally.
      */
     public function handle(EmbeddingGenerator $generator): void
     {
-        $generator->generate($this->model, $this->slot);
+        try {
+            $generator->generate($this->model, $this->slot);
+        } catch (EmptyEmbeddingTextException) {
+            return;
+        }
     }
 }

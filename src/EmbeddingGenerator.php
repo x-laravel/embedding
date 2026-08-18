@@ -7,6 +7,7 @@ use XLaravel\Embedding\Contracts\EmbeddingClient;
 use XLaravel\Embedding\Contracts\VectorStore;
 use XLaravel\Embedding\Events\ModelEmbedded;
 use XLaravel\Embedding\Events\ModelEmbedding;
+use XLaravel\Embedding\Exceptions\EmptyEmbeddingTextException;
 use XLaravel\Embedding\Models\Embedding;
 
 class EmbeddingGenerator
@@ -19,6 +20,10 @@ class EmbeddingGenerator
     public function generate(Model $model, string $slot = 'default'): Embedding
     {
         $text = $this->resolveText($model, $slot);
+
+        if (blank($text)) {
+            throw EmptyEmbeddingTextException::forSlot(get_class($model), $model->getKey(), $slot);
+        }
 
         $model->fireEmbeddingModelEvent('embedding', $slot);
         event(new ModelEmbedding($model, $slot));
