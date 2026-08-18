@@ -72,6 +72,22 @@ return [
         'connection' => env('QUEUE_CONNECTION', 'sync'),
         'generate' => env('EMBEDDING_GENERATE_QUEUE', 'embedding.generate'),
         'sync_payload' => env('EMBEDDING_SYNC_PAYLOAD_QUEUE', 'embedding.sync-payload'),
+
+        /*
+        |----------------------------------------------------------------------
+        | Unique Job Lock Duration
+        |----------------------------------------------------------------------
+        |
+        | GenerateModelEmbedding is a unique job keyed by model class + id +
+        | slot, so a record already queued/processing for a slot is never
+        | dispatched twice. This value is the lock's safety-net expiry (in
+        | seconds), guarding against a permanently stuck lock if a worker
+        | dies before releasing it. Requires a cache store that supports
+        | atomic locks (redis, database, memcached, array, file).
+        |
+        */
+
+        'unique_for' => env('EMBEDDING_GENERATE_UNIQUE_FOR', 3600),
     ],
 
     /*
