@@ -4,6 +4,17 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.3.0 - 2026-08-18
+
+### Added
+
+- `BatchGenerator` — dispatches missing-embedding generation as a trackable `Bus::batch()` instead of the fire-and-forget dispatch `$model->embed()`/`embedding:vector:generate` use on their own. `app(BatchGenerator::class)->dispatch(Post::class, slot: null, force: false, chunk: 100)` returns the `Illuminate\Bus\Batch` (or `null` when nothing is missing), so callers — a UI button, a queued orchestrator — can observe real completion via `$batch->finished()` / a `->finally()` callback instead of guessing when the work is done. Chunks the missing-record query so memory stays bounded regardless of how many records are outstanding.
+- `GenerateModelEmbedding` now implements `Batchable`, so it can be added to a `Bus::batch()` (required for `BatchGenerator`, and for any application code batching it directly).
+
+### Changed
+
+- Extracted the missing-embedding query plan (same-connection `whereDoesntHave`, cross-connection pluck+reject filter) out of `GenerateCommand` into `XLaravel\Embedding\Support\SlotQueryPlanner`, shared by both the console command and `BatchGenerator`. No behavior change for the command.
+
 ## 2.2.0 - 2026-08-18
 
 ### Added

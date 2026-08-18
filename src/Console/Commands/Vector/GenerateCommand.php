@@ -8,7 +8,7 @@ use Throwable;
 use XLaravel\Embedding\Console\Commands\Concerns\ProcessesModelsInChunks;
 use XLaravel\Embedding\Console\Commands\Concerns\ResolvesEmbeddableModels;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
-use XLaravel\Embedding\Models\Embedding;
+use XLaravel\Embedding\Support\SlotQueryPlanner;
 
 class GenerateCommand extends Command
 {
@@ -155,42 +155,7 @@ class GenerateCommand extends Command
      */
     private function buildSlotPlan(string $modelClass, string $slot): array
     {
-        if ($this->option('force')) {
-            return [$modelClass::query(), null];
-        }
-
-        $modelConnection = (new $modelClass())->getConnection()->getName();
-        $embeddingConnection = (new Embedding())->getConnection()->getName();
-
-        if ($modelConnection === $embeddingConnection) {
-            return [
-                $modelClass::whereDoesntHave('embeddings', fn ($q) => $q->where('slot', $slot)),
-                null,
-            ];
-        }
-
-        $filter = function ($models) use ($modelClass, $slot) {
-            if ($models->isEmpty()) {
-                return $models;
-            }
-
-            $existingIds = Embedding::query()
-                ->where('embeddable_type', $modelClass)
-                ->where('slot', $slot)
-                ->whereIn('embeddable_id', $models->modelKeys())
-                ->pluck('embeddable_id')
-                ->all();
-
-            if (empty($existingIds)) {
-                return $models;
-            }
-
-            $existing = array_flip(array_map('strval', $existingIds));
-
-            return $models->reject(fn ($model) => isset($existing[(string) $model->getKey()]));
-        };
-
-        return [$modelClass::query(), $filter];
+        return SlotQueryPlanner::plan($modelClass, $slot, (bool) $this->option('force'));
     }
 
     private function performTask(HasEmbeddings $model, string $slot): void
