@@ -4,6 +4,13 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.2.0 - 2026-08-18
+
+### Added
+
+- `GenerateModelEmbedding` now implements `ShouldBeUnique`, keyed on model class + record id + slot: dispatching generation again for a record/slot that already has a job queued or processing is silently skipped instead of enqueuing a duplicate (wastes an AI API call otherwise). Different records and different slots of the same record are unaffected and continue to run in parallel. The lock is held for the job's full processing duration (success or exhausted retries), not just until it starts.
+- `embedding.queue.unique_for` config option (`EMBEDDING_GENERATE_UNIQUE_FOR` env, default `3600` seconds) — safety-net expiry for the uniqueness lock in case a worker dies before releasing it. Requires a cache store that supports atomic locks (redis, database, memcached, array, file).
+
 ## 2.1.0 - 2026-07-16
 
 ### Added
