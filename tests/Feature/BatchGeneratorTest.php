@@ -49,4 +49,15 @@ class BatchGeneratorTest extends TestCase
         $this->assertNotNull($batch);
         $this->assertCount(2, $batch->added);
     }
+
+    public function test_finally_callback_is_registered_on_the_pending_batch(): void
+    {
+        Article::withoutEmbedding(fn () => Article::create(['title' => 'No', 'body' => 'Embedding']));
+
+        Bus::fake();
+
+        app(BatchGenerator::class)->dispatch(Article::class, finally: fn () => null);
+
+        Bus::assertBatched(fn ($pendingBatch) => count($pendingBatch->finallyCallbacks()) === 1);
+    }
 }

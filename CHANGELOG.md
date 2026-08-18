@@ -4,6 +4,12 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.4.0 - 2026-08-18
+
+### Added
+
+- `BatchGenerator::dispatch()` gains a `finally` parameter (`?Closure $finally = null`). A `Batch` (post-dispatch) cannot have callbacks attached after the fact — only a `PendingBatch` can — so this must be threaded in before the first chunk is dispatched rather than added by the caller once `dispatch()` returns its result.
+
 ## 2.3.0 - 2026-08-18
 
 ### Added
