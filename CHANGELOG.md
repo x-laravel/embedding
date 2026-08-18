@@ -4,6 +4,17 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.5.0 - 2026-08-18
+
+### Added
+
+- `scopeEligibleForEmbedding($query, $slot)` on the `Embeddable` trait — constrains a query to records with non-blank content in at least one of the fields feeding the given slot (per `embeddingSlotMap()`). The AI provider rejects empty-string input, so a record whose source fields are all blank/null can never successfully embed.
+
+### Fixed
+
+- `missingEmbeddingCount()` no longer counts records that could never produce embeddable text (all of the slot's source fields blank/null) as "missing". Previously every such record was counted as missing forever — generation would always fail for it, so nothing users did through the UI or CLI could ever bring the count to zero.
+- `SlotQueryPlanner::plan()` (used by both `embedding:vector:generate` and `BatchGenerator`) now applies the same `eligibleForEmbedding` constraint, so these records are no longer selected for generation at all — no wasted AI API calls, no `failed_jobs` noise, in `--force` mode too.
+
 ## 2.4.0 - 2026-08-18
 
 ### Added

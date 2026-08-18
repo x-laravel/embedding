@@ -20,7 +20,7 @@ class SlotQueryPlanner
     public static function plan(string $modelClass, string $slot, bool $force = false): array
     {
         if ($force) {
-            return [$modelClass::query(), null];
+            return [$modelClass::query()->eligibleForEmbedding($slot), null];
         }
 
         $modelConnection = (new $modelClass())->getConnection()->getName();
@@ -28,7 +28,8 @@ class SlotQueryPlanner
 
         if ($modelConnection === $embeddingConnection) {
             return [
-                $modelClass::whereDoesntHave('embeddings', fn ($q) => $q->where('slot', $slot)),
+                $modelClass::whereDoesntHave('embeddings', fn ($q) => $q->where('slot', $slot))
+                    ->eligibleForEmbedding($slot),
                 null,
             ];
         }
@@ -54,6 +55,6 @@ class SlotQueryPlanner
             return $models->reject(fn ($model) => isset($existing[(string) $model->getKey()]));
         };
 
-        return [$modelClass::query(), $filter];
+        return [$modelClass::query()->eligibleForEmbedding($slot), $filter];
     }
 }

@@ -3,6 +3,7 @@
 namespace XLaravel\Embedding\Concerns;
 
 use Closure;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
@@ -141,6 +142,29 @@ trait Embeddable
     }
 
     /**
+     * Constrain the query to records with non-blank content in at least one
+     * of the fields feeding the given slot — i.e. records that could
+     * actually produce embeddable text. Slots with no declared fields (or
+     * fields not present in embeddingSlotMap()) are left unconstrained.
+     * The AI provider rejects empty-string input, so records that would
+     * always fail generation should not be counted or queried as "missing".
+     */
+    public function scopeEligibleForEmbedding(Builder $query, string $slot): Builder
+    {
+        $fields = $this->embeddingSlotMap()[$slot] ?? [];
+
+        if (empty($fields)) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $q) use ($fields) {
+            foreach ($fields as $field) {
+                $q->orWhere(fn (Builder $q2) => $q2->whereNotNull($field)->where($field, '!=', ''));
+            }
+        });
+    }
+
+    /**
      * Count records of this model that have a stored embedding for the given
      * slot. When the model and the embeddings table live on different
      * connections, whereHas cannot join across them — the embedding-side ID
@@ -180,7 +204,9 @@ trait Embeddable
      * Count records missing a stored embedding. With a slot, counts records
      * lacking that slot's embedding; without, sums the missing counts across
      * every declared slot — a record missing two slots counts twice. Models
-     * with no slots defined always report zero.
+     * with no slots defined always report zero. Records that couldn't
+     * produce embeddable text for the slot (see scopeEligibleForEmbedding)
+     * are not counted — there is nothing generation could do for them.
      */
     public static function missingEmbeddingCount(?string $slot = null): int
     {
@@ -192,12 +218,11 @@ trait Embeddable
             return 0;
         }
 
-        $total = static::query()->count();
-
         $missing = 0;
 
         foreach ($slots as $slotName) {
-            $missing += $total - static::embeddedCount($slotName);
+            $eligible = static::query()->eligibleForEmbedding($slotName)->count();
+            $missing += max(0, $eligible - static::embeddedCount($slotName));
         }
 
         return $missing;
