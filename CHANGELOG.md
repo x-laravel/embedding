@@ -4,6 +4,18 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.6.0 - 2026-08-18
+
+### Changed
+
+- `missingEmbeddingCount()` and the filter/generation query (`SlotQueryPlanner`) now check the *resolved* embedding text (`toEmbeddingText()`, after any per-model normalization), not just the raw source columns. `eligibleForEmbedding()`/v2.5.0 only catches a raw column that is literally null/empty — a column holding placeholder content (e.g. a description of `"-----"`) passes that check but can still normalize down to nothing, and was still being counted as "missing" and dispatched for generation even though v2.5.1's guard would always skip it. `SlotQueryPlanner` gains `missingIds()`, chunking through candidates and applying the same resolved-text filter used for generation — this is now the single source of truth both the count and the query plan use, so they can never drift from what generation would actually do.
+
+## 2.5.1 - 2026-08-18
+
+### Fixed
+
+- `EmbeddingGenerator::generate()` now checks the resolved embedding text before calling the AI provider, throwing `EmptyEmbeddingTextException` when it is blank instead of letting the provider reject an empty-string request. `GenerateModelEmbedding` swallows this exception so the job completes normally rather than retrying and landing in `failed_jobs`. Catches cases `eligibleForEmbedding()` (v2.5.0) cannot — a raw column can be non-blank yet still normalize to an empty string (e.g. `toEmbeddingText()` stripping placeholder punctuation like `"-----"`).
+
 ## 2.5.0 - 2026-08-18
 
 ### Added

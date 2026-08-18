@@ -20,6 +20,7 @@ use XLaravel\Embedding\Jobs\GenerateModelEmbedding;
 use XLaravel\Embedding\Observers\EmbeddingObserver;
 use XLaravel\Embedding\Similarity\Metrics;
 use XLaravel\Embedding\SimilarityManager;
+use XLaravel\Embedding\Support\SlotQueryPlanner;
 
 trait Embeddable
 {
@@ -204,9 +205,12 @@ trait Embeddable
      * Count records missing a stored embedding. With a slot, counts records
      * lacking that slot's embedding; without, sums the missing counts across
      * every declared slot — a record missing two slots counts twice. Models
-     * with no slots defined always report zero. Records that couldn't
-     * produce embeddable text for the slot (see scopeEligibleForEmbedding)
-     * are not counted — there is nothing generation could do for them.
+     * with no slots defined always report zero. Records whose *resolved*
+     * text (toEmbeddingText(), after any per-model normalization) is blank
+     * are not counted — there is nothing generation could ever do for them,
+     * however non-blank their raw source columns look. This mirrors exactly
+     * what BatchGenerator/embedding:vector:generate would actually dispatch
+     * (via SlotQueryPlanner), so the count never drifts from reality.
      */
     public static function missingEmbeddingCount(?string $slot = null): int
     {
@@ -221,8 +225,7 @@ trait Embeddable
         $missing = 0;
 
         foreach ($slots as $slotName) {
-            $eligible = static::query()->eligibleForEmbedding($slotName)->count();
-            $missing += max(0, $eligible - static::embeddedCount($slotName));
+            $missing += count(SlotQueryPlanner::missingIds(static::class, $slotName));
         }
 
         return $missing;
