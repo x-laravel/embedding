@@ -4,6 +4,12 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.6.1 - 2026-08-20
+
+### Changed
+
+- Widened the `laravel/ai` constraint from `^0.6` to `>=0.6 <1.0`. The package only touches `Laravel\Ai\Ai`, `Laravel\Ai\Embeddings`, and `Laravel\Ai\Reranking` — none of their public signatures changed through v0.11.0, and the full test suite (271 tests) passes unmodified against it. Kept below `1.0` since a real major release is expected to carry breaking changes; consumers pinned to `^0.6` are unaffected.
+
 ## 2.6.0 - 2026-08-18
 
 ### Changed

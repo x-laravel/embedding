@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `x-laravel/embedding` is a Laravel package that automatically generates and stores vector embeddings for Eloquent models using `laravel/ai`. When a model's embeddable fields change, a queued job calls `Embeddings::for([...])->generate()` and stores the result in a polymorphic `embeddings` table. v2 adds a second, independent write path: models can publish scalar attributes as a **payload** into a polymorphic `embeddables` table (one row per entity), and similarity searches can filter on it at the database level via the `filter` parameter.
 
 - **Package name:** `x-laravel/embedding` — **Namespace:** `XLaravel\Embedding`
-- PHP `^8.3`, Laravel (illuminate) `^12.0|^13.0`, `laravel/ai ^0.6`
+- PHP `^8.3`, Laravel (illuminate) `^12.0|^13.0`, `laravel/ai >=0.6 <1.0`
 
 ## Running Tests
 
@@ -396,7 +396,7 @@ Each `GenerateModelEmbedding` job carries tags: `['embedding', 'slot:title', 'Ap
 - **`$embeddable` is NOT declared in the trait** — declaring it causes a PHP 8.2+ fatal error when a model also declares it.
 - **`bootEmbeddable` uses `whenBooted`** — direct `static::observe()` in boot causes circular boot.
 - **`slotsToEmbed` new-record detection** — Eloquent does not call `syncChanges()` after `INSERT`, so `getChanges()` returns `[]` for new records. The trait uses `wasRecentlyCreated && empty($changedKeys)` to trigger all slots on creation. When the same instance is later used for an update, `changedKeys` will be non-empty so the field-based path runs instead.
-- **`laravel/ai` version is `^0.6`** — v0.1.x requires PHP `^8.4`; v0.6.x supports PHP `^8.3`.
+- **`laravel/ai` version constraint is `>=0.6 <1.0`** — widened from `^0.6` in v2.6.1 after confirming the package's actual surface (`Ai`, `Embeddings`, `Reranking`) is unchanged through v0.11.0 and the full test suite passes against it; capped below `1.0` since a real major bump is expected to carry breaking changes. v0.1.x requires PHP `^8.4`; v0.6.x+ supports PHP `^8.3`.
 - **`VectorStore` is bound in `register()`** — driver ServiceProviders must bind `VectorStore::class` in `register()`, not `boot()`, so it is available before `EmbeddingGenerator` is first resolved.
 - **`Embedding` model is DB-agnostic** — do not add DB-specific global scopes or casts here. Drivers add their own scopes in `boot()` via `Embedding::addGlobalScope()`.
 - **Reranker macro name is `rerankWithScores`, not `rerank`** — `laravel/ai` already registers `Illuminate\Support\Collection::rerank()` (a more general "rerank by field/closure" macro that does not set scores on the model). To avoid collision and keep both available, our macro is on Eloquent Collection with the explicit `rerankWithScores` name.
