@@ -260,4 +260,39 @@ class SimilarityTest extends TestCase
         $this->assertInstanceOf(Collection::class, $ranked);
         $this->assertCount(0, $ranked);
     }
+
+    public function test_similar_to_text_returns_empty_collection_when_individually_cached_provider_returns_no_embeddings(): void
+    {
+        Post::create(['title' => 'alpha', 'body' => 'a']);
+
+        $this->cacheEmbeddingsIndividually();
+        Embeddings::fake(fn () => new EmbeddingsResponse([], new Usage, new Meta('openai', 'text-embedding-3-small')));
+
+        $results = Post::similarToText('any query');
+
+        $this->assertInstanceOf(Collection::class, $results);
+        $this->assertCount(0, $results);
+    }
+
+    public function test_rank_by_relevance_returns_empty_collection_when_individually_cached_provider_returns_no_embeddings(): void
+    {
+        $post = Post::create(['title' => 'alpha', 'body' => 'a']);
+
+        $this->cacheEmbeddingsIndividually();
+        Embeddings::fake(fn () => new EmbeddingsResponse([], new Usage, new Meta('openai', 'text-embedding-3-small')));
+
+        $ranked = Post::rankByRelevance([$post], 'any query');
+
+        $this->assertInstanceOf(Collection::class, $ranked);
+        $this->assertCount(0, $ranked);
+    }
+
+    private function cacheEmbeddingsIndividually(): void
+    {
+        config([
+            'ai.caching.embeddings.cache' => true,
+            'ai.caching.embeddings.store' => 'array',
+            'ai.caching.embeddings.individually' => true,
+        ]);
+    }
 }

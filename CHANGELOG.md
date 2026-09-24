@@ -4,6 +4,12 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package's major version follows `laravel/ai`.
 
+## 1.0.1 - 2026-09-24
+
+### Fixed
+
+- `similarToText()` and `rankByRelevance()` return an empty collection when the provider returns no embedding while `ai.caching.embeddings.individually` is enabled, instead of letting `EmbeddingsCountMismatchException` escape.
+
 ## 1.0.0 - 2026-09-24
 
 Initial release. Requires PHP ^8.3, Laravel ^12.0 | ^13.0 and `laravel/ai` ^1.0.

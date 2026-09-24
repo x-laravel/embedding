@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
 use InvalidArgumentException;
 use Laravel\Ai\Embeddings;
+use Laravel\Ai\Exceptions\EmbeddingsCountMismatchException;
 use XLaravel\Embedding\Attributes\EmbedOn;
 use XLaravel\Embedding\Attributes\EmbedPayload;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
@@ -670,18 +671,13 @@ trait Embeddable
      */
     public static function similarToText(string $text, int $limit = 10, float $threshold = 0.0, ?Closure $where = null, string $slot = 'default', ?array $filter = null): Collection
     {
-        // The AI provider can legitimately return zero embeddings (empty
-        // input, throttled response, transient backend error). Calling
-        // ->first() on an empty response would raise an undefined-key
-        // error before any guard had a chance to run, so we inspect the
-        // raw response and short-circuit to an empty result set instead.
-        $response = Embeddings::for([$text])->generate();
+        $vector = static::embedQueryText($text);
 
-        if (empty($response->embeddings)) {
+        if ($vector === null) {
             return new Collection;
         }
 
-        return static::similarTo($response->first(), $limit, $threshold, $where, $slot, $filter);
+        return static::similarTo($vector, $limit, $threshold, $where, $slot, $filter);
     }
 
     /**
@@ -697,15 +693,11 @@ trait Embeddable
         if (is_array($query)) {
             $queryVector = $query;
         } else {
-            $response = Embeddings::for([$query])->generate();
+            $queryVector = static::embedQueryText($query);
 
-            // Empty AI response → empty ranked collection rather than an
-            // undefined-key error from EmbeddingsResponse::first().
-            if (empty($response->embeddings)) {
+            if ($queryVector === null) {
                 return new Collection;
             }
-
-            $queryVector = $response->first();
         }
 
         $collection = Collection::make($models);
@@ -728,5 +720,21 @@ trait Embeddable
         }
 
         return $collection->values();
+    }
+
+    /**
+     * The query text's vector, or null when the provider returns no embedding.
+     *
+     * @return array<int, float>|null
+     */
+    protected static function embedQueryText(string $text): ?array
+    {
+        try {
+            $response = Embeddings::for([$text])->generate();
+        } catch (EmbeddingsCountMismatchException) {
+            return null;
+        }
+
+        return $response->embeddings[0] ?? null;
     }
 }
