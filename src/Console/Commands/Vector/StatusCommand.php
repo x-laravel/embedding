@@ -1,0 +1,346 @@
+<?php
+
+namespace XLaravel\Embedding\Console\Commands\Vector;
+
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
+use Laravel\Ai\Ai;
+use Throwable;
+use XLaravel\Embedding\Console\Commands\Concerns\BuildsVectorHealthQueries;
+use XLaravel\Embedding\Console\Commands\Concerns\ReadsStorageMetrics;
+use XLaravel\Embedding\Console\Commands\Concerns\ResolvesEmbeddableModels;
+use XLaravel\Embedding\Console\Commands\Concerns\SumsQueryCounts;
+use XLaravel\Embedding\Contracts\VectorStoreMetrics;
+use XLaravel\Embedding\Models\Embedding;
+use XLaravel\Embedding\SimilarityManager;
+
+class StatusCommand extends Command
+{
+    use BuildsVectorHealthQueries;
+    use ReadsStorageMetrics;
+    use ResolvesEmbeddableModels;
+    use SumsQueryCounts;
+
+    protected $signature = 'embedding:vector:status
+        {model? : Restrict the report to a single HasEmbeddings model class}
+        {--slot= : Restrict the report to a single slot}
+        {--json : Emit a single JSON object suitable for CI / monitoring}';
+
+    protected $description = 'Show a read-only health report for the embeddings table (configuration, coverage, orphans, storage size). Payload health lives in embedding:payload:status.';
+
+    public function handle(): int
+    {
+        $models = $this->resolveModels();
+
+        if ($models === null) {
+            return self::FAILURE;
+        }
+
+        $configuration = $this->collectConfiguration();
+        $aiServices = $this->collectAiServices();
+        $coverage = $this->collectCoverage($models);
+        $health = $this->collectHealth();
+        $storage = $this->collectStorage();
+
+        if ($this->option('json')) {
+            $this->line(json_encode([
+                'configuration' => $configuration,
+                'ai' => $aiServices,
+                'models' => $coverage,
+                'health' => $health,
+                'storage' => $storage,
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION));
+
+            return self::SUCCESS;
+        }
+
+        $this->renderConfiguration($configuration, $aiServices);
+        $this->renderCoverage($coverage);
+        $this->renderHealth($health);
+        $this->renderStorage($storage);
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * @return array{
+     *     similarity_driver: string,
+     *     similarity_driver_source: string,
+     *     auto_detected_from: string|null,
+     *     vector_dimensions: int,
+     *     db_connection: string|null,
+     *     db_table: string|null,
+     *     queue_connection: string|null,
+     *     queue_name: string|null,
+     * }
+     */
+    private function collectConfiguration(): array
+    {
+        $configured = (string) config('embedding.similarity.driver', 'auto');
+
+        /** @var SimilarityManager $manager */
+        $manager = $this->laravel->make(SimilarityManager::class);
+        $resolved = $manager->getDefaultDriver();
+
+        $autoFrom = null;
+        if ($configured === 'auto') {
+            try {
+                $autoFrom = DB::connection(config('embedding.database.connection'))->getDriverName();
+            } catch (Throwable) {
+                $autoFrom = null;
+            }
+        }
+
+        return [
+            'similarity_driver' => $resolved,
+            'similarity_driver_source' => $configured === 'auto' ? 'auto' : 'forced',
+            'auto_detected_from' => $autoFrom,
+            'vector_dimensions' => (int) config('embedding.dimensions'),
+            'db_connection' => config('embedding.database.connection'),
+            'db_table' => config('embedding.database.embeddings_table'),
+            'queue_connection' => config('embedding.queue.connection'),
+            'queue_name' => config('embedding.queue.generate'),
+        ];
+    }
+
+    /**
+     * @param  array<int, string>  $models
+     * @return array<int, array<string, mixed>>
+     */
+    private function collectCoverage(array $models): array
+    {
+        $rows = [];
+        $slotFilter = $this->option('slot');
+
+        foreach ($models as $modelClass) {
+            $instance = new $modelClass;
+            $slotMap = $instance->embeddingSlotMap();
+
+            if (empty($slotMap)) {
+                $rows[] = [
+                    'model' => $modelClass,
+                    'slot' => null,
+                    'records' => null,
+                    'embedded' => null,
+                    'coverage' => null,
+                    'note' => 'no slots defined',
+                ];
+
+                continue;
+            }
+
+            $slots = $slotFilter !== null ? [$slotFilter] : array_keys($slotMap);
+
+            foreach ($slots as $slot) {
+                if ($slotFilter !== null && ! array_key_exists($slot, $slotMap)) {
+                    $rows[] = [
+                        'model' => $modelClass,
+                        'slot' => $slot,
+                        'records' => null,
+                        'embedded' => null,
+                        'coverage' => null,
+                        'note' => 'slot not defined on model',
+                    ];
+
+                    continue;
+                }
+
+                $total = $modelClass::query()->count();
+                $embedded = $modelClass::embeddedCount($slot);
+                $coverage = $total > 0 ? round($embedded / $total * 100, 1) : null;
+
+                $rows[] = [
+                    'model' => $modelClass,
+                    'slot' => $slot,
+                    'records' => $total,
+                    'embedded' => $embedded,
+                    'coverage' => $coverage,
+                    'note' => null,
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return array{orphan_records: int, invalid_slot_records: int, total_vectors: int}
+     */
+    private function collectHealth(): array
+    {
+        return [
+            'orphan_records' => $this->totalForQueries($this->orphanQueries()),
+            'invalid_slot_records' => $this->totalForQueries($this->invalidSlotQueries()),
+            'total_vectors' => Embedding::query()->count(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     embedding: array{provider: string|null, model: string|null},
+     *     rerank: array{provider: string|null, model: string|null},
+     * }
+     */
+    private function collectAiServices(): array
+    {
+        return [
+            'embedding' => $this->resolveAiService('ai.default_for_embeddings', 'embedding'),
+            'rerank' => $this->resolveAiService('ai.default_for_reranking', 'rerank'),
+        ];
+    }
+
+    /**
+     * @return array{provider: string|null, model: string|null}
+     */
+    private function resolveAiService(string $configKey, string $kind): array
+    {
+        $configured = config($configKey);
+
+        // Failover lists are valid laravel/ai config; show only the first
+        // entry's provider name in the table — operators can dig into
+        // config/ai.php for the rest.
+        if (is_array($configured)) {
+            $configured = $configured[0] ?? null;
+
+            if (is_array($configured)) {
+                $configured = $configured['provider'] ?? null;
+            }
+        }
+
+        if (! is_string($configured) || $configured === '') {
+            return ['provider' => null, 'model' => null];
+        }
+
+        try {
+            $provider = $kind === 'embedding'
+                ? Ai::fakeableEmbeddingProvider($configured)
+                : Ai::fakeableRerankingProvider($configured);
+
+            $model = $kind === 'embedding'
+                ? $provider->defaultEmbeddingsModel()
+                : $provider->defaultRerankingModel();
+
+            return ['provider' => $configured, 'model' => $model];
+        } catch (Throwable $e) {
+            if ($this->getOutput()->isVerbose()) {
+                $this->line("  <comment>{$kind} model resolution failed:</comment> {$e->getMessage()}");
+            }
+
+            return ['provider' => $configured, 'model' => null];
+        }
+    }
+
+    /**
+     * @return array{rows: int|null, bytes: int|null, data_bytes: int|null, index_bytes: int|null}
+     */
+    private function collectStorage(): array
+    {
+        return $this->storageSnapshot(VectorStoreMetrics::class);
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     * @param  array{
+     *     embedding: array{provider: string|null, model: string|null},
+     *     rerank: array{provider: string|null, model: string|null},
+     * }  $services
+     */
+    private function renderConfiguration(array $config, array $services): void
+    {
+        $this->line('<comment>Configuration:</comment>');
+
+        $similarityNote = '';
+        if ($config['similarity_driver_source'] === 'auto' && $config['auto_detected_from'] !== null) {
+            $similarityNote = "auto from {$config['auto_detected_from']}";
+        } elseif ($config['similarity_driver_source'] === 'forced') {
+            $similarityNote = 'forced via env';
+        }
+
+        $rows = [
+            ['Similarity Driver', $config['similarity_driver'], '', $similarityNote],
+            ['Vector Dimensions', (string) $config['vector_dimensions'], '', ''],
+            ['DB Connection', $config['db_connection'] ?? 'n/a', $config['db_table'] !== null ? "table: {$config['db_table']}" : '', ''],
+            ['Queue Connection', $config['queue_connection'] ?? 'n/a', $config['queue_name'] !== null ? "queue: {$config['queue_name']}" : '', ''],
+            ['Embedding Provider', $services['embedding']['provider'] ?? 'n/a', $services['embedding']['model'] ?? 'n/a', ''],
+            ['Rerank Provider', $services['rerank']['provider'] ?? 'n/a', $services['rerank']['model'] ?? 'n/a', ''],
+        ];
+
+        $this->table(['Setting', 'Value', 'Detail', 'Note'], $rows);
+        $this->newLine();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function renderCoverage(array $rows): void
+    {
+        $this->line('<comment>Model Coverage:</comment>');
+
+        if (empty($rows)) {
+            $this->line('  <fg=gray>No models found.</>');
+            $this->newLine();
+
+            return;
+        }
+
+        $tableRows = [];
+        foreach ($rows as $row) {
+            if ($row['note'] !== null) {
+                $tableRows[] = [
+                    $row['model'],
+                    $row['slot'] ?? 'n/a',
+                    'n/a',
+                    'n/a',
+                    "<fg=gray>{$row['note']}</>",
+                ];
+
+                continue;
+            }
+
+            $tableRows[] = [
+                $row['model'],
+                $row['slot'],
+                number_format($row['records']),
+                number_format($row['embedded']),
+                $row['coverage'] === null ? 'n/a' : number_format($row['coverage'], 1).'%',
+            ];
+        }
+
+        $this->table(['Model', 'Slot', 'Records', 'Embedded', 'Coverage'], $tableRows);
+        $this->newLine();
+    }
+
+    /**
+     * @param  array{orphan_records: int, invalid_slot_records: int, total_vectors: int}  $health
+     */
+    private function renderHealth(array $health): void
+    {
+        $this->line('<comment>Health:</comment>');
+        $hint = ' <fg=gray>→ Run </><info>embedding:vector:clean</info><fg=gray> to fix.</>';
+
+        $orphan = '  Orphan records (missing models):    '.number_format($health['orphan_records']);
+        if ($health['orphan_records'] > 0) {
+            $orphan .= $hint;
+        }
+        $this->line($orphan);
+
+        $invalid = '  Invalid slots (stale definitions):  '.number_format($health['invalid_slot_records']);
+        if ($health['invalid_slot_records'] > 0) {
+            $invalid .= $hint;
+        }
+        $this->line($invalid);
+
+        $this->line('  Total stored vectors:               '.number_format($health['total_vectors']));
+        $this->newLine();
+    }
+
+    /**
+     * @param  array{rows: int|null, bytes: int|null, data_bytes: int|null, index_bytes: int|null}  $storage
+     */
+    private function renderStorage(array $storage): void
+    {
+        $this->line('<comment>Storage:</comment>');
+        $this->renderStorageLines($storage);
+        $this->newLine();
+    }
+}
