@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use InvalidArgumentException;
 use Laravel\Ai\Embeddings;
 use Laravel\Ai\Exceptions\EmbeddingsCountMismatchException;
@@ -181,7 +182,7 @@ trait Embeddable
         $embeddingConnection = (new $embeddingModel)->getConnection()->getName();
 
         if ($modelConnection === $embeddingConnection) {
-            return static::whereHas(
+            return static::embeddingSubjectsQuery()->whereHas(
                 'embeddings',
                 fn ($query) => $query->where('slot', $slot)
             )->count();
@@ -197,7 +198,7 @@ trait Embeddable
             return 0;
         }
 
-        return static::query()
+        return static::embeddingSubjectsQuery()
             ->whereIn($instance->getKeyName(), $embeddingIds)
             ->count();
     }
@@ -498,6 +499,24 @@ trait Embeddable
         }
 
         return config('embedding.soft_delete', false);
+    }
+
+    /**
+     * Records that should hold embeddings: soft-deleted rows are included while their embeddings are kept.
+     *
+     * @return Builder<static>
+     */
+    public static function embeddingSubjectsQuery(): Builder
+    {
+        return static::keepsEmbeddingsOfTrashed()
+            ? static::query()->withTrashed()
+            : static::query();
+    }
+
+    public static function keepsEmbeddingsOfTrashed(): bool
+    {
+        return in_array(SoftDeletes::class, class_uses_recursive(static::class), true)
+            && (new static)->keepEmbeddingOnSoftDelete();
     }
 
     /**

@@ -4,6 +4,17 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package's major version follows `laravel/ai`.
 
+## 1.0.2 - 2026-09-24
+
+### Added
+
+- `embeddingSubjectsQuery()` and `keepsEmbeddingsOfTrashed()` on the `Embeddable` trait — the records that should hold embeddings, including soft-deleted rows while `keepEmbeddingOnSoftDelete()` is true.
+
+### Fixed
+
+- With embeddings kept on soft delete (`embedding.soft_delete` or `$keepEmbeddingOnSoftDelete`), soft-deleted records now count toward `missingEmbeddingCount()`, `embeddedCount()` and the `embedding:vector:status` / `embedding:payload:status` coverage, and `embedding:vector:generate` / `embedding:payload:sync` fill them in. Previously they were left out, so a record soft-deleted before the setting was enabled stayed without an embedding and was never reported.
+- Without kept embeddings, `embedding:vector:clean` and `embedding:payload:clean` treat rows still left for soft-deleted records as orphans.
+
 ## 1.0.1 - 2026-09-24
 
 ### Fixed

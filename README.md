@@ -361,6 +361,8 @@ class Post extends Model implements HasEmbeddings
 | restore | all slots regenerated | unchanged |
 | force delete | all slot embeddings deleted | all slot embeddings deleted |
 
+The same setting decides which records the package expects to hold embeddings. With embeddings kept, soft-deleted records count toward `embedding:vector:status` / `embedding:payload:status` coverage and `missingEmbeddingCount()`, and `embedding:vector:generate` / `embedding:payload:sync` fill them in. Without, they are left out of all of these, and `embedding:vector:clean` / `embedding:payload:clean` treat any rows still left for them as orphans.
+
 ## Artisan Commands
 
 The CLI mirrors the package's two independent write paths: `embedding:vector:*` commands only ever touch the `embeddings` table, `embedding:payload:*` commands only ever touch the `embeddables` table. Two umbrella commands (`embedding:clear`, `embedding:clean`) operate on both tables at once for full-reset / full-cleanup workflows.

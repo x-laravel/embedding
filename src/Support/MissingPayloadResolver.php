@@ -37,7 +37,7 @@ class MissingPayloadResolver
             if ($this->usesKeyDiff()) {
                 foreach ($this->missingKeyWindows() as $ids) {
                     foreach (array_chunk($ids, $chunk) as $slice) {
-                        foreach ($this->modelClass::query()->whereKey($slice)->get() as $model) {
+                        foreach ($this->modelClass::embeddingSubjectsQuery()->whereKey($slice)->get() as $model) {
                             yield $model;
                         }
                     }
@@ -73,7 +73,7 @@ class MissingPayloadResolver
     private function missingKeyWindows(): Generator
     {
         return KeyWindows::missing(
-            $this->modelClass::query(),
+            $this->modelClass::embeddingSubjectsQuery(),
             fn (array $ids) => KeyWindows::heldBy($this->payloadQuery(), $this->prototype(), $ids),
         );
     }
@@ -93,7 +93,7 @@ class MissingPayloadResolver
     private function baseQuery(): Builder
     {
         if ($this->force) {
-            return $this->modelClass::query();
+            return $this->modelClass::embeddingSubjectsQuery();
         }
 
         $prototype = $this->prototype();
@@ -102,7 +102,7 @@ class MissingPayloadResolver
         $modelKey = $prototype->getKeyName();
         $payloadTable = (new EmbeddablePayload)->getTable();
 
-        return $this->modelClass::query()->whereNotExists(
+        return $this->modelClass::embeddingSubjectsQuery()->whereNotExists(
             function ($query) use ($payloadTable, $morphClass, $modelTable, $modelKey) {
                 $query->selectRaw('1')
                     ->from($payloadTable)

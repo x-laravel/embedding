@@ -7,6 +7,8 @@ use XLaravel\Embedding\Models\Embeddable;
 
 trait BuildsPayloadHealthQueries
 {
+    use ReadsExistingModelRows;
+
     /**
      * @return array<int, Builder>
      */
@@ -53,26 +55,18 @@ trait BuildsPayloadHealthQueries
             $modelKey = $instance->getKeyName();
             $embeddablesTable = (new Embeddable())->getTable();
 
-            // The subquery uses Query Builder so the SoftDeletes global scope
-            // does not apply — soft-deleted rows still count as "exists" and
-            // their preserved payload records are not misclassified as stale.
             return Embeddable::query()
                 ->where('embeddable_type', $type)
-                ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddablesTable) {
-                    $q->selectRaw('1')
-                        ->from($modelTable)
-                        ->whereColumn(
-                            "{$modelTable}.{$modelKey}",
-                            "{$embeddablesTable}.embeddable_id",
-                        );
-                });
+                ->whereNotExists(
+                    $this->existingModelRows($instance)
+                        ->selectRaw('1')
+                        ->whereColumn("{$modelTable}.{$modelKey}", "{$embeddablesTable}.embeddable_id")
+                );
         }
 
         // Cross-connection — pluck the (single-row-per-entity, so small)
         // embeddable_id set from the payload side, verify which still exist
         // on the model side, and turn the difference into a delete query.
-        // Query Builder is used on the model side so the SoftDeletes scope
-        // does not strip soft-deleted rows.
         $payloadIds = Embeddable::query()
             ->where('embeddable_type', $type)
             ->pluck('embeddable_id')
@@ -82,9 +76,8 @@ trait BuildsPayloadHealthQueries
             return null;
         }
 
-        $existingIds = $instance->getConnection()
-            ->table($instance->getTable())
-            ->whereIn($instance->getKeyName(), $payloadIds)
+        $existingIds = $this->existingModelRows($instance)
+            ->whereIn($instance->getQualifiedKeyName(), $payloadIds)
             ->pluck($instance->getKeyName())
             ->all();
 

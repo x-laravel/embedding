@@ -9,6 +9,8 @@ use XLaravel\Embedding\Models\Embedding;
 
 trait BuildsVectorHealthQueries
 {
+    use ReadsExistingModelRows;
+
     /**
      * @return array<int, Builder>
      */
@@ -55,21 +57,15 @@ trait BuildsVectorHealthQueries
             $modelKey = $instance->getKeyName();
             $embeddingTable = (new Embedding())->getTable();
 
-            // The subquery uses Query Builder so the SoftDeletes global scope
-            // does not apply — soft-deleted rows still count as "exists" and
-            // their preserved embeddings are not misclassified as orphans.
             return [
                 Embedding::query()
                     ->where('embeddable_type', $type)
                     ->when($invalidSlots !== [], fn ($query) => $query->whereNotIn('slot', $invalidSlots))
-                    ->whereNotExists(function ($q) use ($modelTable, $modelKey, $embeddingTable) {
-                        $q->selectRaw('1')
-                            ->from($modelTable)
-                            ->whereColumn(
-                                "{$modelTable}.{$modelKey}",
-                                "{$embeddingTable}.embeddable_id",
-                            );
-                    }),
+                    ->whereNotExists(
+                        $this->existingModelRows($instance)
+                            ->selectRaw('1')
+                            ->whereColumn("{$modelTable}.{$modelKey}", "{$embeddingTable}.embeddable_id")
+                    ),
             ];
         }
 
@@ -78,9 +74,7 @@ trait BuildsVectorHealthQueries
         // side, and turn the difference into a delete query. Reverses the
         // naive direction (model → embedding) so we never ship a
         // multi-thousand IN clause to the embedding database for types whose
-        // model table is large but barely embedded. Query Builder is used on
-        // the model side so the SoftDeletes scope does not strip
-        // soft-deleted rows.
+        // model table is large but barely embedded.
         $distinctEmbeddedIds = Embedding::query()
             ->where('embeddable_type', $type)
             ->when($invalidSlots !== [], fn ($query) => $query->whereNotIn('slot', $invalidSlots))
@@ -92,9 +86,8 @@ trait BuildsVectorHealthQueries
             return [];
         }
 
-        $existingIds = $instance->getConnection()
-            ->table($instance->getTable())
-            ->whereIn($instance->getKeyName(), $distinctEmbeddedIds)
+        $existingIds = $this->existingModelRows($instance)
+            ->whereIn($instance->getQualifiedKeyName(), $distinctEmbeddedIds)
             ->pluck($instance->getKeyName())
             ->all();
 

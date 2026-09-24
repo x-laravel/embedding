@@ -145,7 +145,7 @@ class StatusCommand extends Command
                     continue;
                 }
 
-                $total = $modelClass::query()->count();
+                $total = $modelClass::embeddingSubjectsQuery()->count();
                 $embedded = $modelClass::embeddedCount($slot);
                 $coverage = $total > 0 ? round($embedded / $total * 100, 1) : null;
 

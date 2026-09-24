@@ -95,7 +95,7 @@ class StatusCommand extends Command
                 continue;
             }
 
-            $total = $modelClass::query()->count();
+            $total = $modelClass::embeddingSubjectsQuery()->count();
             $withPayload = $this->countRecordsWithPayload($modelClass);
             $coverage = $total > 0 ? round($withPayload / $total * 100, 1) : null;
 
@@ -123,7 +123,7 @@ class StatusCommand extends Command
             $modelKey = $instance->getKeyName();
             $embeddablesTable = (new Embeddable())->getTable();
 
-            return $modelClass::query()
+            return $modelClass::embeddingSubjectsQuery()
                 ->whereExists(function ($q) use ($embeddablesTable, $morphClass, $modelTable, $modelKey) {
                     $q->selectRaw('1')
                         ->from($embeddablesTable)
@@ -148,7 +148,7 @@ class StatusCommand extends Command
             return 0;
         }
 
-        return $modelClass::query()
+        return $modelClass::embeddingSubjectsQuery()
             ->whereIn($instance->getKeyName(), $payloadIds)
             ->count();
     }

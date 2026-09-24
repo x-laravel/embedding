@@ -105,7 +105,7 @@ class MissingSlotResolver
         if ($this->usesKeyDiff()) {
             foreach ($this->missingKeyWindows() as $ids) {
                 foreach (array_chunk($ids, $chunk) as $slice) {
-                    yield $this->modelClass::query()->whereKey($slice)->get();
+                    yield $this->modelClass::embeddingSubjectsQuery()->whereKey($slice)->get();
                 }
             }
 
@@ -160,7 +160,7 @@ class MissingSlotResolver
      */
     private function eligibleQuery(): Builder
     {
-        return $this->modelClass::query()->eligibleForEmbedding($this->slot);
+        return $this->modelClass::embeddingSubjectsQuery()->eligibleForEmbedding($this->slot);
     }
 
     private function usesKeyDiff(): bool
