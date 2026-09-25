@@ -22,6 +22,7 @@ use XLaravel\Embedding\Jobs\GenerateModelEmbedding;
 use XLaravel\Embedding\Observers\EmbeddingObserver;
 use XLaravel\Embedding\Similarity\Metrics;
 use XLaravel\Embedding\SimilarityManager;
+use XLaravel\Embedding\Support\KeyWindows;
 use XLaravel\Embedding\Support\MissingSlotResolver;
 
 trait Embeddable
@@ -170,8 +171,8 @@ trait Embeddable
     /**
      * Count records of this model that have a stored embedding for the given
      * slot. When the model and the embeddings table live on different
-     * connections, whereHas cannot join across them — the embedding-side ID
-     * list is plucked first and verified against the model side instead.
+     * connections, whereHas cannot join across them — the two key sets are
+     * compared in windows instead.
      */
     public static function embeddedCount(string $slot = 'default'): int
     {
@@ -188,19 +189,22 @@ trait Embeddable
             )->count();
         }
 
-        $embeddingIds = $embeddingModel::query()
+        $embeddings = $embeddingModel::query()
             ->where('embeddable_type', $instance->getMorphClass())
-            ->where('slot', $slot)
-            ->pluck('embeddable_id')
-            ->all();
+            ->where('slot', $slot);
 
-        if (empty($embeddingIds)) {
-            return 0;
+        $missing = 0;
+
+        $windows = KeyWindows::missing(
+            static::embeddingSubjectsQuery(),
+            fn (array $ids) => KeyWindows::heldBy($embeddings, $instance, $ids),
+        );
+
+        foreach ($windows as $ids) {
+            $missing += count($ids);
         }
 
-        return static::embeddingSubjectsQuery()
-            ->whereIn($instance->getKeyName(), $embeddingIds)
-            ->count();
+        return static::embeddingSubjectsQuery()->count() - $missing;
     }
 
     /**

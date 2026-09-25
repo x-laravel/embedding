@@ -4,6 +4,13 @@ All notable changes to `x-laravel/embedding` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The package's major version follows `laravel/ai`.
 
+## 1.0.3 - 2026-09-25
+
+### Fixed
+
+- When the model and the embedding tables live on different connections, `embeddedCount()`, `embedding:vector:status`, `embedding:payload:status`, `embedding:vector:clean`, `embedding:payload:clean` and `embedding:clean` compare the two key sets in windows instead of sending every ID in a single `IN` list. Previously a model with more IDs than the database accepts as placeholders (65,535 on MySQL) failed with `SQLSTATE[HY000]: General error: 1390 Prepared statement contains too many placeholders`.
+- `embedding:payload:clean` and `embedding:clean` split the stale payload delete by the connection's `IdSetBinder` limit, as the orphan vector delete already did.
+
 ## 1.0.2 - 2026-09-24
 
 ### Added

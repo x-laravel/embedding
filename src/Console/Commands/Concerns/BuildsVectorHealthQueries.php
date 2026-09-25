@@ -4,7 +4,6 @@ namespace XLaravel\Embedding\Console\Commands\Concerns;
 
 use Illuminate\Database\Eloquent\Builder;
 use XLaravel\Embedding\Contracts\HasEmbeddings;
-use XLaravel\Embedding\IdSetManager;
 use XLaravel\Embedding\Models\Embedding;
 
 trait BuildsVectorHealthQueries
@@ -69,51 +68,11 @@ trait BuildsVectorHealthQueries
             ];
         }
 
-        // Cross-connection — pluck the (usually small) distinct embeddable_id
-        // set from the embedding side, verify which still exist on the model
-        // side, and turn the difference into a delete query. Reverses the
-        // naive direction (model → embedding) so we never ship a
-        // multi-thousand IN clause to the embedding database for types whose
-        // model table is large but barely embedded.
-        $distinctEmbeddedIds = Embedding::query()
+        $rows = Embedding::query()
             ->where('embeddable_type', $type)
-            ->when($invalidSlots !== [], fn ($query) => $query->whereNotIn('slot', $invalidSlots))
-            ->distinct()
-            ->pluck('embeddable_id')
-            ->all();
+            ->when($invalidSlots !== [], fn ($query) => $query->whereNotIn('slot', $invalidSlots));
 
-        if (empty($distinctEmbeddedIds)) {
-            return [];
-        }
-
-        $existingIds = $this->existingModelRows($instance)
-            ->whereIn($instance->getQualifiedKeyName(), $distinctEmbeddedIds)
-            ->pluck($instance->getKeyName())
-            ->all();
-
-        $orphanIds = array_values(array_diff($distinctEmbeddedIds, $existingIds));
-
-        if (empty($orphanIds)) {
-            return [];
-        }
-
-        /**
-         * A driver that carries the whole set in one bind reports no limit;
-         * the portable fallback caps it, so the list is split to match.
-         */
-        $binder = app(IdSetManager::class)->forConnection((new Embedding())->getConnectionName());
-        $limit = $binder->maxIdsPerQuery();
-
-        return array_map(
-            fn (array $chunk) => $binder->apply(
-                Embedding::query()
-                    ->where('embeddable_type', $type)
-                    ->when($invalidSlots !== [], fn ($query) => $query->whereNotIn('slot', $invalidSlots)),
-                'embeddable_id',
-                $chunk,
-            ),
-            array_chunk($orphanIds, $limit > 0 ? $limit : count($orphanIds)),
-        );
+        return $this->rowsWithIds($rows, $this->idsMissingFromModel($rows, $instance));
     }
 
     /**

@@ -10,6 +10,7 @@ use XLaravel\Embedding\Console\Commands\Concerns\SumsQueryCounts;
 use XLaravel\Embedding\Contracts\PayloadStoreMetrics;
 use XLaravel\Embedding\Models\Embeddable;
 use XLaravel\Embedding\Models\Embedding;
+use XLaravel\Embedding\Support\MissingPayloadResolver;
 
 class StatusCommand extends Command
 {
@@ -96,7 +97,7 @@ class StatusCommand extends Command
             }
 
             $total = $modelClass::embeddingSubjectsQuery()->count();
-            $withPayload = $this->countRecordsWithPayload($modelClass);
+            $withPayload = $total - MissingPayloadResolver::for($modelClass)->count();
             $coverage = $total > 0 ? round($withPayload / $total * 100, 1) : null;
 
             $rows[] = [
@@ -109,48 +110,6 @@ class StatusCommand extends Command
         }
 
         return $rows;
-    }
-
-    private function countRecordsWithPayload(string $modelClass): int
-    {
-        $instance = new $modelClass();
-        $morphClass = $instance->getMorphClass();
-        $modelConnection = $instance->getConnection()->getName();
-        $payloadConnection = (new Embeddable())->getConnection()->getName();
-
-        if ($modelConnection === $payloadConnection) {
-            $modelTable = $instance->getTable();
-            $modelKey = $instance->getKeyName();
-            $embeddablesTable = (new Embeddable())->getTable();
-
-            return $modelClass::embeddingSubjectsQuery()
-                ->whereExists(function ($q) use ($embeddablesTable, $morphClass, $modelTable, $modelKey) {
-                    $q->selectRaw('1')
-                        ->from($embeddablesTable)
-                        ->where("{$embeddablesTable}.embeddable_type", $morphClass)
-                        ->whereColumn(
-                            "{$embeddablesTable}.embeddable_id",
-                            "{$modelTable}.{$modelKey}",
-                        );
-                })
-                ->count();
-        }
-
-        // Cross-connection — the payload table holds at most one row per
-        // entity, so the ID list stays small. Pluck it from the payload
-        // side and verify existence on the model side.
-        $payloadIds = Embeddable::query()
-            ->where('embeddable_type', $morphClass)
-            ->pluck('embeddable_id')
-            ->all();
-
-        if (empty($payloadIds)) {
-            return 0;
-        }
-
-        return $modelClass::embeddingSubjectsQuery()
-            ->whereIn($instance->getKeyName(), $payloadIds)
-            ->count();
     }
 
     /**

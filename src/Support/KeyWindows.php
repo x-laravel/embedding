@@ -6,6 +6,7 @@ use Closure;
 use Generator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use XLaravel\Embedding\IdSetManager;
 
 /**
@@ -22,20 +23,24 @@ class KeyWindows
     public const SIZE = 5000;
 
     /**
+     * A `$key` other than the model's own key may repeat across rows, so it is
+     * read distinct.
+     *
      * @param  Builder<Model>  $source
      * @param  Closure(array<int, int|string>): array<string, true>  $held
      * @return Generator<int, array<int, int|string>>
      */
-    public static function missing(Builder $source, Closure $held, int $window = self::SIZE): Generator
+    public static function missing(Builder $source, Closure $held, int $window = self::SIZE, ?string $key = null): Generator
     {
         $model = $source->getModel();
-        $key = $model->getKeyName();
+        $key ??= $model->getKeyName();
         $column = $model->getTable().'.'.$key;
         $after = null;
 
         while (true) {
             $query = (clone $source)->toBase()
                 ->select($column)
+                ->distinct($key !== $model->getKeyName())
                 ->orderBy($column)
                 ->limit($window);
 
@@ -65,11 +70,11 @@ class KeyWindows
      * answer with one indexed read; anything else travels as an explicit set,
      * in whatever portions the driver can bind.
      *
-     * @param  Builder<Model>  $query
+     * @param  Builder<Model>|QueryBuilder  $query
      * @param  array<int, int|string>  $ids
      * @return array<string, true>
      */
-    public static function heldBy(Builder $query, Model $prototype, array $ids, string $column = 'embeddable_id'): array
+    public static function heldBy(Builder|QueryBuilder $query, Model $prototype, array $ids, string $column = 'embeddable_id'): array
     {
         if ($ids === []) {
             return [];
